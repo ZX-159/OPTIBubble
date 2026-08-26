@@ -1,0 +1,4 @@
+# Development extras
+-r requirements.txt
+fonttools[brotli]>=4.47      # regenerate the subsetted web fonts (make_assets.py)
+playwright>=1.40             # headless UI screenshots (docs/shot_web.py)

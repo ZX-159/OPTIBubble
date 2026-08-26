@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OPTIBubble
+GenericName=OMR Grading
+Comment=Print answer sheets, scan with any phone over Wi-Fi, grade locally with OpenCV
+Exec=optibubble
+Icon=com.optibubble.app
+Terminal=false
+Categories=Education;Science;Utility;
+Keywords=omr;grading;exam;answer;sheet;scan;teacher;mcq;
+StartupNotify=true

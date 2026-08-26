@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0B1220">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>OPTIBubble Scanner</title>
+<style>
+/* REGMARK — paper · ink · grading pen (mobile scanner) */
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/opensans-regular.woff2') format('woff2')}
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/opensans-semibold.woff2') format('woff2')}
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/opensans-bold.woff2') format('woff2')}
+@font-face{font-family:'Open Sans';font-style:normal;font-weight:800;font-display:swap;src:url('/fonts/opensans-extrabold.woff2') format('woff2')}
+:root{
+  --bg0:#0C0D11;--bg1:#131419;--bg2:#1A1C23;--bg3:#22252E;
+  --tx:#EAEBEF;--tx2:#A3A6B1;--tx3:#686C79;
+  --brand:#FF5A2D;--brand-hi:#FF7448;--brand-ink:#160B06;--brand-dim:rgba(255,90,45,.14);
+  --ok:#3FBF7C;--ok-dim:rgba(63,191,124,.13);
+  --warn:#E3A93F;--warn-dim:rgba(227,169,63,.13);
+  --err:#E4574E;--err-dim:rgba(228,87,78,.13);
+  --hair:rgba(234,235,239,.08);--hair2:rgba(234,235,239,.16);
+  --safe-b:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%}
+body{
+  background:var(--bg0);color:var(--tx);
+  font-family:'Open Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  display:flex;flex-direction:column;min-height:100dvh;overscroll-behavior:none;
+  font-size:13px;font-feature-settings:'tnum' 1;
+}
+header{display:flex;align-items:center;gap:12px;padding:13px 16px 9px;
+  background:var(--bg1);position:relative}
+header::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--hair2) 12%,var(--hair2) 88%,transparent)}
+header img{height:22px;width:auto}
+.chip{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--ok);background:var(--ok-dim);
+  padding:4px 10px;border-radius:999px;display:flex;align-items:center;gap:6px}
+.chip .dot{width:6px;height:6px;border-radius:999px;background:var(--ok)}
+main{flex:1;display:flex;flex-direction:column;align-items:center;
+  padding:12px 14px 12px;max-width:560px;width:100%;margin:0 auto}
+h1{font-size:15px;font-weight:800;margin:6px 0 3px;text-align:center}
+.sub{color:var(--tx2);font-size:12px;text-align:center;margin:0 0 13px}
+.stage{position:relative;width:100%;border-radius:4px;overflow:hidden;
+  background:var(--bg1);aspect-ratio:3/4;max-height:62dvh}
+.stage video,.stage img#preview{width:100%;height:100%;object-fit:cover;display:block}
+#overlay{position:absolute;inset:0;pointer-events:none}
+.guide{position:absolute;inset:6% 4%;border-radius:4px}
+.guide .c{position:absolute;width:30px;height:30px;border:3px solid var(--brand);
+  opacity:.95}
+.c.tl{top:0;left:0;border-right:0;border-bottom:0}
+.c.tr{top:0;right:0;border-left:0;border-bottom:0}
+.c.bl{bottom:0;left:0;border-right:0;border-top:0}
+.c.br{bottom:0;right:0;border-left:0;border-top:0}
+.hint{position:absolute;left:0;right:0;bottom:0;padding:26px 14px 11px;
+  text-align:center;font-size:11.5px;color:var(--tx);
+  background:linear-gradient(transparent,rgba(12,13,17,.9))}
+.controls{display:flex;align-items:center;justify-content:center;gap:26px;
+  padding:16px 0 6px;width:100%}
+button{font-family:inherit;border:0;cursor:pointer;color:var(--tx)}
+.shutter{width:68px;height:68px;border-radius:6px;background:var(--brand);
+  color:var(--brand-ink);position:relative}
+.shutter:active{transform:scale(.94);background:var(--brand-hi)}
+.shutter::after{content:'';position:absolute;inset:7px;border-radius:4px;
+  border:2px solid var(--brand-ink);opacity:.85}
+.roundbtn{width:44px;height:44px;border-radius:4px;background:var(--bg3);
+  font-size:17px;line-height:1}
+.roundbtn:active{transform:scale(.93);background:var(--bg2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:12px 20px;border-radius:4px;font-size:13.5px;font-weight:800;
+  background:var(--brand);color:var(--brand-ink);letter-spacing:.02em}
+.btn.ghost{background:var(--bg3);color:var(--tx)}
+.btn.ok{background:var(--ok);color:#08130C}
+.btn:active{transform:scale(.97)}
+.actions{display:flex;gap:10px;width:100%;padding-top:14px}
+.actions .btn{flex:1}
+.card{width:100%;background:var(--bg1);border-radius:4px;padding:20px 18px;text-align:center}
+.card .big{font-size:42px;font-weight:800;margin:2px 0;font-feature-settings:'tnum' 1}
+.scoreline{display:flex;justify-content:center;gap:26px;margin:13px 0 4px}
+.scoreline div{display:flex;flex-direction:column;gap:2px}
+.scoreline b{font-size:20px;font-weight:800;font-feature-settings:'tnum' 1}
+.scoreline span{font-size:9.5px;color:var(--tx3);text-transform:uppercase;
+  letter-spacing:.13em;font-weight:800}
+.meter{height:3px;border-radius:0;background:var(--bg3);overflow:hidden;margin:13px 0 4px}
+.meter i{display:block;height:100%;width:0;background:var(--brand);transition:width .25s}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:10px;font-weight:800;
+  padding:5px 11px;border-radius:999px;letter-spacing:.09em;text-transform:uppercase}
+.badge.ok{background:var(--ok-dim);color:var(--ok)}
+.badge.warn{background:var(--warn-dim);color:var(--warn)}
+.badge.err{background:var(--err-dim);color:var(--err)}
+.hidden{display:none!important}
+.warnbox{font-size:11.5px;color:var(--warn);background:var(--warn-dim);
+  border-radius:4px;padding:10px 12px;margin-top:10px;text-align:left}
+footer{padding:9px 0 calc(13px + var(--safe-b));color:var(--tx3);font-size:10.5px;
+  text-align:center;letter-spacing:.04em}
+footer b{color:var(--tx2)}
+#steps ol{margin:0;padding-left:18px;color:var(--tx2);font-size:12.5px;
+  line-height:1.85;text-align:left}
+#steps b{color:var(--tx)}
+ul.flags{list-style:none;margin:11px 0 0;padding:0;font-size:12px;color:var(--warn)}
+ul.flags li{padding:3px 0}
+.spin{width:38px;height:38px;border-radius:999px;margin:6px auto 12px;
+  border:3px solid var(--hair2);border-top-color:var(--brand);animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@keyframes pop{0%{transform:scale(.9);opacity:0}100%{transform:scale(1);opacity:1}}
+.pop{animation:pop .2s ease}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" onerror="this.style.display='none'">
+  <div class="chip" id="netChip"><span class="dot"></span>Connected</div>
+</header>
+
+<main>
+  <!-- STEP 0: intro / permission -->
+  <section id="steps" class="card pop">
+    <span class="badge ok">📱 Scan with your phone</span>
+    <h1 id="testTitle" style="font-size:19px">Loading test…</h1>
+    <p class="sub" id="testSub">—</p>
+    <ol>
+      <li>Hold the sheet <b>flat</b> on a well-lit table</li>
+      <li>Fit all <b>4 corner squares</b> inside the frame</li>
+      <li>Snap — grading happens instantly on the teacher's computer</li>
+    </ol>
+    <div class="actions">
+      <button class="btn" id="startBtn">📷&nbsp; Start camera</button>
+      <button class="btn ghost" id="fileBtnAlt">🖼️&nbsp; Upload photo</button>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" capture="environment">
+  </section>
+
+  <!-- LIVE CAMERA -->
+  <section id="cameraView" class="hidden" style="width:100%">
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <div id="overlay"><div class="guide">
+        <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+      </div>
+      <div class="hint" id="hint">Fill the frame — all 4 black corner squares must be visible</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="roundbtn" id="torchBtn" title="Torch">🔦</button>
+      <button class="shutter" id="shutterBtn" aria-label="Capture"></button>
+      <button class="roundbtn" id="galleryBtn" title="Choose from gallery">🖼️</button>
+    </div>
+  </section>
+
+  <!-- PREVIEW / CONFIRM -->
+  <section id="confirmView" class="hidden" style="width:100%">
+    <div class="stage"><img id="preview" alt="Captured sheet"></div>
+    <div id="quickWarn" class="warnbox hidden"></div>
+    <div class="actions">
+      <button class="btn ghost" id="retakeBtn">Retake</button>
+      <button class="btn ok" id="sendBtn">Send&nbsp;✓</button>
+    </div>
+  </section>
+
+  <!-- UPLOADING -->
+  <section id="uploadView" class="card hidden">
+    <div class="spin"></div>
+    <h1 style="font-size:16px">Grading on the desktop…</h1>
+    <p class="sub">Perspective correction → bubble analysis → scoring</p>
+    <div class="meter"><i id="bar"></i></div>
+  </section>
+
+  <!-- RESULT -->
+  <section id="resultView" class="card hidden" style="text-align:center">
+    <div id="resultBody"></div>
+    <div class="actions"><button class="btn" id="nextBtn">Scan next sheet →</button></div>
+  </section>
+</main>
+
+<footer><b id="counter">0</b> sheets submitted this session · local network only — your data never leaves the room</footer>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const token=location.pathname.split("/").pop();
+let stream=null,track=null,torchOn=false,capturedBlob=null;
+let count=+(localStorage.getItem("ob_"+token)||0);$("counter").textContent=count;
+let CFG={quality:0.92,width:2048};
+
+/* ---------- info ---------- */
+fetch("/api/info/"+token).then(r=>r.json()).then(d=>{
+  if(d.title){$("testTitle").textContent=d.title;
+    $("testSub").textContent=(d.subject?d.subject+" · ":"")+d.questions+" questions · "+d.options+" options";
+    if(d.quality)CFG.quality=d.quality/100;
+    if(d.width)CFG.width=d.width;}
+  else{$("testTitle").textContent="Session not found";
+    $("testSub").textContent="Please scan the QR code on the teacher's screen again.";}
+}).catch(()=>{$("netChip").innerHTML="⚠️ Offline";});
+
+/* ---------- view switch ---------- */
+function show(id){for(const v of["steps","cameraView","confirmView","uploadView","resultView"])
+  $(v).classList.toggle("hidden",v!==id); window.scrollTo({top:0});}
+
+/* ---------- camera ---------- */
+async function startCamera(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},
+      width:{ideal:CFG.width},height:{ideal:Math.round(CFG.width*0.75)}},audio:false});
+    track=stream.getVideoTracks()[0];
+    $("video").srcObject=stream; show("cameraView");
+  }catch(e){
+    // no getUserMedia over plain http / denied → native camera app fallback
+    $("fileInput").removeAttribute("capture");
+    $("fileInput").click();
+  }
+}
+$("startBtn").onclick=startCamera;
+$("fileBtnAlt").onclick=()=>$("fileInput").click();
+$("galleryBtn").onclick=()=>$("fileInput").click();
+$("fileInput").onchange=e=>{const f=e.target.files&&e.target.files[0];if(f)handleFile(f);e.target.value="";};
+
+$("torchBtn").onclick=async()=>{
+  try{await track.applyConstraints({advanced:[{torch:!torchOn}]});torchOn=!torchOn;
+    $("torchBtn").style.background=torchOn?"rgba(96,165,250,.35)":"";}catch(e){
+    $("hint").textContent="Torch not available on this browser";}};
+$("retakeBtn").onclick=()=>{capturedBlob=null;show(stream?"cameraView":"steps");};
+$("nextBtn").onclick=()=>{show(stream?"cameraView":"steps");};
+
+function handleFile(file){
+  const img=new Image();
+  img.onload=()=>{
+    const c=document.createElement("canvas");
+    const scale=Math.min(1,CFG.width/Math.max(img.width,img.height));
+    c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);
+    c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+    c.toBlob(b=>{if(b){capturedBlob=b;confirmStage();}},"image/jpeg",CFG.quality);
+    URL.revokeObjectURL(img.src);
+  };
+  img.src=URL.createObjectURL(file);
+}
+
+$("shutterBtn").onclick=()=>{
+  const v=$("video");
+  const c=document.createElement("canvas");
+  const scale=Math.min(1,CFG.width/Math.max(v.videoWidth,v.videoHeight));
+  c.width=Math.round(v.videoWidth*scale);c.height=Math.round(v.videoHeight*scale);
+  c.getContext("2d").drawImage(v,0,0,c.width,c.height);
+  c.toBlob(b=>{if(b){capturedBlob=b;confirmStage();}},"image/jpeg",CFG.quality);
+};
+
+/* ---------- client-side quick check ---------- */
+function quickCheck(blob,cb){
+  const img=new Image();
+  img.onload=()=>{
+    const W=260,c=document.createElement("canvas");
+    const H=Math.round(img.height*W/img.width);c.width=W;c.height=H;
+    const ctx=c.getContext("2d");ctx.drawImage(img,0,0,W,H);
+    const px=ctx.getImageData(0,0,W,H).data;
+    let lumaSum=0,n=0;const dark=new Uint8Array(W*H);
+    for(let i=0;i<px.length;i+=4){
+      const l=.299*px[i]+.587*px[i+1]+.114*px[i+2];
+      lumaSum+=l;n++;
+      if(l<85)dark[i/4]=1;
+    }
+    const mean=lumaSum/n;
+    const warn=[];
+    if(mean<42)warn.push("Very dark photo — turn on more light.");
+    else if(mean>238)warn.push("Overexposed — reduce direct light/glare.");
+    // dark-cluster presence near the 4 corners of the central frame area
+    let cornersFound=0;
+    const gx0=Math.round(W*.06),gy0=Math.round(H*.06),gw=Math.round(W*.88),gh=Math.round(H*.88);
+    const bw=Math.round(W*.14),bh=Math.round(H*.11);
+    const zones=[[gx0,gy0],[gx0+gw-bw,gy0],[gx0,gy0+gh-bh],[gx0+gw-bw,gy0+gh-bh]];
+    for(const[zx,zy]of zones){
+      let cnt=0,tot=0;
+      for(let y=zy;y<zy+bh;y++)for(let x=zx;x<zx+bw;x++){tot++;cnt+=dark[y*W+x];}
+      if(cnt/Math.max(1,tot)>.02)cornersFound++;
+    }
+    if(cornersFound<3)warn.push("Not all 4 corner squares look visible — make sure the whole sheet is inside the frame.");
+    // crude sharpness: mean abs horizontal gradient
+    let grad=0,gn=0;
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+      const i=(y*W+x)*4;grad+=Math.abs(px[i]-px[i+4]);gn++;}
+    if(grad/gn<2.2)warn.push("Image looks blurry — clean the lens and hold steady.");
+    cb(warn);
+    URL.revokeObjectURL(img.src);
+  };
+  img.src=URL.createObjectURL(blob);
+}
+
+function confirmStage(){
+  const url=URL.createObjectURL(capturedBlob);
+  $("preview").src=url;show("confirmView");
+  const wb=$("quickWarn");wb.classList.add("hidden");
+  quickCheck(capturedBlob,w=>{
+    if(w.length){wb.innerHTML="⚠️ <b>Quick check:</b><br>• "+w.join("<br>• ")+
+      "<br><br>You can retake, or send anyway — the desktop will verify.";
+      wb.classList.remove("hidden");}
+  });
+}
+
+/* ---------- upload + poll ---------- */
+$("sendBtn").onclick=()=>{
+  if(!capturedBlob)return;
+  show("uploadView");const bar=$("bar");bar.style.width="12%";
+  const fd=new FormData();fd.append("photo",capturedBlob,"sheet.jpg");
+  const x=new XMLHttpRequest();
+  x.open("POST","/api/upload/"+token);
+  x.upload.onprogress=e=>{if(e.lengthComputable)bar.style.width=(10+80*e.loaded/e.total)+"%";};
+  x.onload=()=>{ if(x.status!=200){showError("NETWORK","Upload failed ("+x.status+").","Check the Wi-Fi connection and try again.");return;}
+    try{const d=JSON.parse(x.responseText);poll(d.receipt);}catch(e){showError("NETWORK","Unexpected server reply.","Try again.");}};
+  x.onerror=()=>showError("NETWORK","Connection to the desktop was lost.","Make sure both devices are on the same Wi-Fi.");
+  x.send(fd);
+};
+
+function poll(rid){
+  const bar=$("bar");bar.style.width="95%";
+  const t0=Date.now();
+  (function loop(){
+    fetch("/api/receipt/"+rid).then(r=>r.json()).then(d=>{
+      if(d.status==="done"){bar.style.width="100%";setTimeout(()=>showResult(d.result),250);}
+      else if(d.status==="error")showError(d.error.code,d.error.message,d.error.hint);
+      else if(Date.now()-t0>25000)showError("TIMEOUT","Grading is taking unusually long.","The teacher can finish it from the review queue.");
+      else setTimeout(loop,650);
+    }).catch(()=>{ if(Date.now()-t0>25000)showError("TIMEOUT","Lost contact while grading.","Try again.");else setTimeout(loop,900); });
+  })();
+}
+
+function bump(){count++;localStorage.setItem("ob_"+token,count);$("counter").textContent=count;}
+
+function showResult(r){
+  bump();
+  const b=$("resultBody");
+  if(r.status==="auto"){
+    const pct=r.max?Math.round(100*r.score/r.max):0;
+    b.innerHTML=`<div class="pop"><span class="badge ok">✓ Graded instantly</span>
+      <div style="font-size:13px;color:var(--muted)">Student ${r.student_id?esc(r.student_id):"—"}</div>
+      <div class="big" style="color:#86EFAC">${r.score}<span style="font-size:20px;color:var(--muted)">/${r.max}</span></div>
+      <div class="scoreline"><div><b>${pct}%</b><span>score</span></div>
+      <div><b>${Math.round(r.confidence*100)}%</b><span>confidence</span></div></div></div>`;
+  }else{
+    b.innerHTML=`<div class="pop"><span class="badge warn">👤 Sent for review</span>
+      <h1 style="font-size:17px;margin:10px 0 4px">Flagged for the teacher</h1>
+      <p class="sub" style="margin:0">${r.flags&&r.flags.length?r.flags.length+" item(s) need a human check (faint / double / blank marks).":"Manual verification requested."}</p>
+      <ul class="flags">${(r.flags||[]).slice(0,6).map(f=>"<li>• "+esc(f.message||f.kind)+"</li>").join("")}</ul></div>`;
+  }
+  show("resultView");
+}
+
+function showError(code,msg,hint){
+  const b=$("resultBody");
+  b.innerHTML=`<div class="pop"><span class="badge err">✕ ${esc(code)}</span>
+    <h1 style="font-size:17px;margin:10px 0 6px">${esc(msg)}</h1>
+    <p class="sub" style="margin:0">${esc(hint||"")}</p></div>`;
+  show("resultView");
+}
+
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+window.addEventListener("beforeunload",()=>{if(stream)stream.getTracks().forEach(t=>t.stop());});
+</script>
+</body>
+</html>

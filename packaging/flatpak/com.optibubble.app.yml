@@ -1,0 +1,39 @@
+app-id: com.optibubble.app
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: optibubble
+
+# The app is a local Wi-Fi server + system browser UI, so it needs network
+# access and a way to open the user's default browser (via the portal).
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+
+modules:
+  - name: optibubble
+    buildsystem: simple
+    build-commands:
+      # Python deps into /app (the Freedesktop SDK ships python3 + pip)
+      - pip3 install --prefix=/app --no-build-isolation -r requirements.txt
+      # The application itself (engine + web UI + bundled fonts)
+      - mkdir -p /app/optibubble-app
+      - cp -r main.py optibubble /app/optibubble-app/
+      # Launcher wrapper — keeps data inside the Flatpak sandbox home
+      - install -Dm755 packaging/flatpak/optibubble.sh /app/bin/optibubble
+      # Desktop integration
+      - install -Dm644 packaging/flatpak/com.optibubble.app.desktop
+        /app/share/applications/com.optibubble.app.desktop
+      - install -Dm644 packaging/flatpak/com.optibubble.app.metainfo.xml
+        /app/share/metainfo/com.optibubble.app.metainfo.xml
+      - install -Dm644 assets/icon.png
+        /app/share/icons/hicolor/512x512/apps/com.optibubble.app.png
+      - install -Dm644 src-tauri/icons/128x128.png
+        /app/share/icons/hicolor/128x128/apps/com.optibubble.app.png
+
+    sources:
+      - type: dir
+        path: ../..

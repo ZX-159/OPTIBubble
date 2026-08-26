@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OPTIBubble",
+  "version": "1.0.0",
+  "identifier": "com.optibubble.app",
+  "build": {
+    "frontendDist": "../optibubble/web"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OPTIBubble — Scan. Grade. Done.",
+        "url": "http://127.0.0.1:5000/",
+        "width": 1300,
+        "height": 860,
+        "minWidth": 1020,
+        "minHeight": 700,
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Education",
+    "shortDescription": "Local OMR grading with a mobile-bridge scanner",
+    "longDescription": "Print dynamic MCQ answer sheets, scan them with any smartphone camera over local Wi-Fi, grade with OpenCV on your own computer, review ambiguous marks and export results to CSV. 100% local — no cloud.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
+  }
+}

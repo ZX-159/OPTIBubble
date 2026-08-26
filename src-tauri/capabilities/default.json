@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the OPTIBubble desktop window (the UI is the local web app served by the Python engine).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

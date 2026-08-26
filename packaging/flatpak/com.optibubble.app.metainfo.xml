@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.optibubble.app</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>OPTIBubble</name>
+  <summary>Local computer-vision OMR grading with a mobile-bridge scanner</summary>
+  <description>
+    <p>
+      OPTIBubble turns any classroom into a scanning room: print dynamically
+      generated MCQ answer sheets, let students photograph them with any phone
+      browser over local Wi-Fi, and grade everything on the teacher's computer
+      with OpenCV — in milliseconds, with zero cloud involvement.
+    </p>
+    <p>
+      Ambiguous marks (blank, double-marked, faint) are flagged for human
+      review with cropped evidence images, and verified results export to CSV
+      instantly. 100% local: no accounts, no telemetry, no internet required.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.optibubble.app.desktop</launchable>
+  <url type="homepage">https://github.com/your-username/OPTIBubble</url>
+  <url type="bugtracker">https://github.com/your-username/OPTIBubble/issues</url>
+  <developer_name>OPTIBubble contributors</developer_name>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-08-25">
+      <description>
+        <p>Initial release: sheet generator, mobile scanner bridge, OpenCV
+        grading engine with confidence flagging, review queue and CSV export.</p>
+      </description>
+    </release>
+  </releases>
+</component>

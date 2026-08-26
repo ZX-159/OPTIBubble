@@ -1,0 +1,115 @@
+# ============================================================================
+# OPTIBubble — main.yml
+# One workflow: CI on every push/PR, release builds on tags (v*) or manual run.
+#
+#   push / pull_request  → job "selftest" only (fast, ~1 min)
+#   tag v* / dispatch    → selftest + installers for every platform:
+#                         Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
+#                         Linux AppImage + deb + RPM  ·  Flatpak bundle
+#
+# No secrets required. Release is created as a DRAFT — review and publish at
+# github.com/<you>/OPTIBubble/releases (see setup.md → "Cutting a release").
+# ============================================================================
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ------------------------------------------------------------------- CI ---
+  selftest:
+    name: Self-test (25→29 checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install engine dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the end-to-end self-test
+        run: python selftest.py
+
+  # ------------------------------------------------- release: native shells -
+  tauri:
+    name: ${{ matrix.platform }} installers
+    needs: selftest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: AppImage + deb + RPM from one build
+          - platform: ubuntu-22.04
+            args: ""
+          # macOS: Apple Silicon + Intel
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          # Windows: MSI + NSIS setup
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Linux system dependencies (WebKit)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
+
+      - name: Build bundles & attach to the draft release
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: .
+          tagName: v__VERSION__
+          releaseName: "OPTIBubble v__VERSION__"
+          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Note: the Python engine (pip install -r requirements.txt) is still required on the target machine — see setup.md."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # ----------------------------------------------------- release: Flatpak ---
+  flatpak:
+    name: Flatpak bundle
+    needs: selftest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Flatpak
+        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v7
+        with:
+          bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
+          manifest-path: packaging/flatpak/com.optibubble.app.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - name: Attach bundle to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: OPTIBubble_*_x86_64.flatpak

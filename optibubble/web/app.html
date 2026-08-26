@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPTIBubble</title>
+<link rel="icon" href="/assets/icon-128.png">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="app">
+  <div class="brand">
+    <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" id="brandLogo">
+    <span class="mini">OB</span>
+  </div>
+
+  <div class="topbar">
+    <div class="tabs" id="tabs"></div>
+    <div class="spacer"></div>
+    <span class="pill off" id="srvPill">● server offline</span>
+    <button class="iconbtn" id="themeBtn" title="Toggle theme">◐</button>
+  </div>
+
+  <nav class="nav">
+    <div class="logo"><img src="/assets/logo-wordmark-white.png" alt=""></div>
+    <div class="tag">SCAN · GRADE · DONE</div>
+    <a class="item" data-page="dashboard"><span class="ic">⌂</span><span>Dashboard</span></a>
+    <a class="item" data-page="setup"><span class="ic">✎</span><span>New Test</span></a>
+    <a class="item" data-page="serve"><span class="ic">◉</span><span>Scan &amp; Serve</span></a>
+    <a class="item" data-page="review"><span class="ic">☰</span><span>Review Queue</span>
+      <span class="badge" id="navReviewBadge">0</span></a>
+    <a class="item" data-page="results"><span class="ic">▦</span><span>Results</span></a>
+    <a class="item" data-page="settings"><span class="ic">⚙</span><span>Settings</span></a>
+    <a class="item" data-page="help"><span class="ic">?</span><span>Help &amp; FAQ</span></a>
+    <div class="foot">v<span id="ver"></span><br>100% local · no cloud<br><span id="dataDir" class="mono"></span></div>
+  </nav>
+
+  <main class="main">
+    <!-- ============================ DASHBOARD ============================ -->
+    <section class="page" id="page-dashboard">
+      <div class="hero">
+        <div class="art">
+          <span class="badge info">local OMR · mobile bridge</span>
+          <h1>Grade a whole class from their phones.</h1>
+          <p>Generate the answer sheet, let students photograph it with any phone
+             browser over your Wi-Fi, and OpenCV grades it here — in milliseconds.
+             Ambiguous marks wait for you in the review queue; everything exports to CSV.</p>
+          <div class="steps">
+            <div class="step" data-goto="setup"><i>1</i><b>Create a test</b><span>questions, options, key</span></div>
+            <div class="step" data-goto="serve"><i>2</i><b>Print &amp; serve</b><span>QR magic link</span></div>
+            <div class="step" data-goto="review"><i>3</i><b>Review &amp; export</b><span>crops → CSV</span></div>
+          </div>
+        </div>
+        <div class="card" id="currentTestCard">
+          <h3>📌 Active test</h3>
+          <p class="sub" id="currentTestSub">No test yet — create one to begin.</p>
+          <div id="currentTestBody" class="muted" style="font-size:13px">—</div>
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn sm" data-goto="serve">Scan &amp; Serve →</button>
+            <a class="btn sm ghost" href="/api/sheet.pdf" target="_blank" id="pdfLink" style="display:none">Open sheet PDF</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b id="stReceived" style="color:var(--accent2)">0</b><span>sheets received</span></div>
+        <div class="stat"><b id="stGraded" style="color:var(--ok2)">0</b><span>auto-graded</span></div>
+        <div class="stat"><b id="stPending" style="color:var(--warn2)">0</b><span>awaiting review</span></div>
+        <div class="stat"><b id="stExported" style="color:#C4B5FD">0</b><span>exported to CSV</span></div>
+      </div>
+
+      <div class="card">
+        <h3>🗂 Recent tests</h3>
+        <p class="sub">Click a test to make it active again.</p>
+        <div id="recentTests"><div class="spin"></div></div>
+      </div>
+    </section>
+
+    <!-- ============================ SETUP ============================ -->
+    <section class="page" id="page-setup">
+      <div class="setup setup3">
+        <div class="card">
+          <h3>✎ Test definition</h3>
+          <p class="sub">The sheet layout, QR session and geometry are generated automatically.</p>
+          <div class="field"><label>Test title *</label>
+            <input type="text" id="fTitle" placeholder="e.g. Physics Midterm — Form A" maxlength="80"></div>
+          <div class="field"><label>Subject</label>
+            <input type="text" id="fSubject" placeholder="e.g. Physics" maxlength="80"></div>
+          <div class="field"><label>Questions (2–102)</label>
+            <input type="number" id="fQuestions" min="2" max="102" value="20">
+            <span class="hint">1–34 → one column · 35–68 → two · 69–102 → three</span></div>
+          <div class="field"><label>Options per question</label>
+            <div class="seg" id="fOptions">
+              <button data-v="2">2 · A-B</button><button data-v="3">3 · A-C</button>
+              <button data-v="4" class="active">4 · A-D</button><button data-v="5">5 · A-E</button>
+            </div></div>
+          <div class="field"><label>Student-ID digits</label>
+            <div class="seg" id="fDigits">
+              <button data-v="4">4</button><button data-v="6">6</button>
+              <button data-v="7" class="active">7</button><button data-v="0">none</button>
+            </div></div>
+          <div class="field"><label>Paper size</label>
+            <div class="seg" id="fPaper">
+              <button data-v="a4" class="active">A4</button><button data-v="letter">Letter</button>
+            </div></div>
+          <button class="btn ok" id="createBtn" style="width:100%; margin-top:4px">✔&nbsp; Create test &amp; generate sheet</button>
+          <p class="hint" id="setupErr" style="color:var(--err2); margin-top:9px; display:none"></p>
+        </div>
+
+        <div class="card">
+          <h3>🔑 Answer key</h3>
+          <p class="sub">Click a cell to cycle through the options. Changes apply live.</p>
+          <div class="keytools">
+            <button class="btn sm ghost" id="keyRandom">🎲 Random</button>
+            <button class="btn sm ghost" id="keyClear">Clear</button>
+            <input type="text" id="keyPaste" placeholder="paste: 1:A 2:C … or ABCD…" style="flex:1; min-width:170px">
+            <button class="btn sm ghost" id="keyLoad">Load</button>
+          </div>
+          <div class="keygrid" id="keyGrid"></div>
+        </div>
+
+        <div>
+          <div class="card" style="margin-bottom:14px">
+            <h3>🖨 Sheet design</h3>
+            <p class="sub">Edits stay inside the header — the answer area is never
+               touched; text auto-shrinks instead of overlapping.</p>
+            <div class="field"><label>Sheet instructions</label>
+              <textarea id="fInstructions" rows="3" maxlength="240"
+                placeholder="Leave empty for the default helper text"></textarea>
+              <span class="hint">Printed under the title · ≤240 chars · 3 lines</span></div>
+            <div class="field"><label>Header text size — <span id="fHeaderScaleVal">100%</span></label>
+              <input type="range" id="fHeaderScale" min="0.8" max="1.4" step="0.05" value="1"></div>
+            <div class="field"><label>Wordmark side</label>
+              <div class="seg" id="fLogo">
+                <button data-v="left" class="active">◧ Left</button>
+                <button data-v="right">Right ◨</button>
+              </div>
+              <span class="hint">Logo prints in brand blue #2e5a99.</span></div>
+          </div>
+          <div class="card">
+            <h3>👁 Preview</h3>
+            <p class="sub">Appears after you create the test.</p>
+            <div class="previewbox" id="previewBox" style="display:none">
+              <img id="previewImg" alt="Sheet preview">
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ SERVE ============================ -->
+    <section class="page" id="page-serve">
+      <div class="serve">
+        <div class="card">
+          <h3>📱 Magic link</h3>
+          <p class="sub">Students scan this with the phone's normal camera — the scanner
+             opens in the browser. No app, no internet.</p>
+          <div class="qrwrap">
+            <div class="qrframe mark"><img id="qrImg" alt="Scan to start"></div>
+            <div class="urlrow">
+              <input type="text" id="srvUrl" class="mono" readonly value="—">
+              <button class="btn sm ghost" id="copyBtn">Copy</button>
+            </div>
+            <select id="ipSel" style="max-width:280px"></select>
+            <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
+            <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" style="text-decoration:none">🖨 Open sheet PDF (print at 100%)</a>
+          </div>
+        </div>
+        <div class="card">
+          <h3>📡 Live activity</h3>
+          <p class="sub">Photos arrive over your Wi-Fi and are graded locally in &lt;150 ms.</p>
+          <div class="log" id="logBox"><span class="in">waiting for the first sheet…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ REVIEW ============================ -->
+    <section class="page" id="page-review">
+      <div class="review">
+        <div class="card">
+          <h3>⚑ Flagged sheets <span class="badge warn" id="reviewCount">0</span></h3>
+          <p class="sub">Blank · double-marked · faint — one human look, then export.</p>
+          <div class="rlist" id="reviewList"></div>
+        </div>
+        <div class="card" id="reviewDetail">
+          <h3>Nothing flagged — clean sailing ✨</h3>
+          <p class="sub">Ambiguous sheets will appear here automatically.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ RESULTS ============================ -->
+    <section class="page" id="page-results">
+      <div class="card">
+        <div class="restop">
+          <h3>▦ Results</h3>
+          <span class="badge ok" id="resStat">—</span>
+          <div class="spacer"></div>
+          <input type="text" id="resFilter" placeholder="filter by ID…" style="max-width:150px">
+          <a class="btn sm ghost" href="/api/results/export.csv" id="exportBtn" style="text-decoration:none">⬇ Export CSV copy</a>
+          <a class="btn sm ghost" href="#" id="revealBtn" style="text-decoration:none">📂 Open data folder</a>
+        </div>
+        <div id="resHisto"></div>
+        <div style="overflow-x:auto">
+          <table class="tbl">
+            <thead><tr>
+              <th>#</th><th>Time</th><th>Student ID</th><th>Score</th><th>%</th>
+              <th>Confidence</th><th>Status</th>
+            </tr></thead>
+            <tbody id="resBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ SETTINGS ============================ -->
+    <section class="page" id="page-settings">
+      <div class="grid" style="grid-template-columns:1fr 1fr; align-items:start" id="settingsGrid">
+        <div class="card"><h3>🧠 OMR engine</h3>
+          <p class="sub">Fine-tune the computer-vision grading model.</p><div id="setEngine"></div></div>
+        <div>
+          <div class="card" style="margin-bottom:16px"><h3>📷 Camera &amp; upload</h3>
+            <p class="sub">Phone-side capture quality.</p><div id="setCamera"></div></div>
+          <div class="card" style="margin-bottom:16px"><h3>🌐 Local server</h3>
+            <p class="sub">Restart the server after changing these.</p><div id="setServer"></div></div>
+          <div class="card"><h3>🧰 Maintenance</h3>
+            <p class="sub" id="setDataDir">data folder</p>
+            <button class="btn sm ghost" id="resetSettings">Reset to defaults</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ HELP ============================ -->
+    <section class="page" id="page-help">
+      <div class="card" style="margin-bottom:14px">
+        <h3>ℹ️ About OPTIBubble</h3>
+        <p class="sub">Local computer-vision OMR grading with a mobile-bridge scanner —
+           v<span class="ver"></span>. Sheets are generated, photographed on any phone over
+           Wi-Fi and graded with OpenCV on this machine. Nothing leaves your network.</p>
+      </div>
+      <div id="faqList"></div>
+    </section>
+  </main>
+</div>
+<div id="toasts"></div>
+<script src="/assets/app.js"></script>
+</body>
+</html>

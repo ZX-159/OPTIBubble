@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OPTIBubble runtime data (never commit student data!)
+OPTIBubbleData/
+*.log
+
+# Editors
+.idea/
+.vscode/

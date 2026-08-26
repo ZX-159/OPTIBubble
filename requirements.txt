@@ -1,0 +1,9 @@
+# OPTIBubble — runtime dependencies (the whole app is local-first Python)
+flask>=3.0
+numpy>=1.24
+opencv-python>=4.8
+Pillow>=10.0
+pymupdf>=1.24          # sheet preview rendering + selftest rasteriser
+qrcode>=7.4
+reportlab>=4.0
+werkzeug>=3.0
