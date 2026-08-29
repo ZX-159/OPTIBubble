@@ -52,6 +52,8 @@ class Hub:
 
         self._server = None
         self._server_thread: Optional[threading.Thread] = None
+        self._https_server = None
+        self._https_thread: Optional[threading.Thread] = None
         self._server_error: str = ""
 
         self._preview_cache: tuple = ()         # (mtime, bytes)
@@ -84,6 +86,12 @@ class Hub:
             "server": {"running": self.server_running,
                        "error": self.server_error,
                        "port": self.settings.port, "host": self.settings.host,
+                       "https_port": self.settings.https_port,
+                       "https_running": self.https_running,
+                       "https_mode": self.settings.https_mode,
+                       "https_domain": (self.settings.acme_domain
+                                        if (self.settings.https_mode
+                                            == "letsencrypt") else ""),
                        "ips": self.lan_ips(),
                        "url": self.magic_url() if self.test else ""},
             "stats": {**self.stats,
@@ -146,6 +154,26 @@ class Hub:
         p = self.storage.test_root(self.test) / "sheet.pdf"
         return p if p.exists() else None
 
+    def update_key(self, entries: dict) -> bool:
+        """Merge answer-key entries into the active test (define-key-later)."""
+        if not self.test:
+            return False
+        k = self.test.options_per_question
+        letters = "ABCDEFGHIJ"[:k]
+        for q, a in (entries or {}).items():
+            try:
+                qn = int(q)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= qn <= self.test.num_questions and a in letters:
+                self.test.answer_key[qn] = a
+        self.storage.save_test(self.test, self.layout)
+        complete = len(self.test.answer_key) >= self.test.num_questions
+        self.log(f"Answer key updated — {len(self.test.answer_key)}/"
+                 f"{self.test.num_questions} defined"
+                 + ("" if complete else " (grading scores defined questions only)"))
+        return True
+
     def open_test(self, test_id: str) -> bool:
         data = self.storage.load_test(test_id)
         if not data:
@@ -204,19 +232,109 @@ class Hub:
             self._server_thread = threading.Thread(target=self._server.serve_forever,
                                                    name="optibubble-server", daemon=True)
             self._server_thread.start()
-            self.emit("server_started", url=self.magic_url())
-            return True
         except OSError as e:
             self._server = None
             self._server_error = str(e)
             self.emit("server_error", error=str(e))
             return False
+        if self.settings.enable_https:
+            self._start_https(app)
+        self.emit("server_started", url=self.magic_url())
+        return True
+
+    def trusted_cert_paths(self):
+        d = self.data_dir / "certs"
+        return d / "trusted-fullchain.pem", d / "trusted-key.pem"
+
+    def provision_trusted(self) -> None:
+        """Issue/renew the Let's Encrypt certificate (runs in a thread)."""
+        import threading as _th
+
+        def run():
+            try:
+                from .acme import issue_trusted_cert
+                s = self.settings
+                issue_trusted_cert(s.acme_domain, s.duckdns_token,
+                                   s.acme_email or "teacher@example.com",
+                                   self.data_dir / "certs",
+                                   log=lambda m: self.log("🔒 " + m))
+                self.log("🔒 trusted certificate ready — restart the server "
+                         "to serve it", "ok")
+                self.emit("https_provisioned", domain=s.acme_domain)
+            except Exception as e:
+                self.log(f"⚠ certificate provisioning failed: {e}", "warn")
+                self.emit("https_provision_failed", error=str(e))
+
+        _th.Thread(target=run, name="optibubble-acme", daemon=True).start()
+
+    def _start_https(self, app) -> None:
+        """Serve the same app over TLS — trusted cert when configured, else
+        the built-in local CA."""
+        try:
+            import ssl
+            cert_dir = self.data_dir / "certs"
+            from .acme import trusted_cert_valid
+            tc, tk = self.trusted_cert_paths()
+            if (self.settings.https_mode == "letsencrypt"
+                    and self.settings.acme_domain and trusted_cert_valid(tc, 0)):
+                leaf_c, leaf_k = tc, tk
+                if not trusted_cert_valid(tc, 30):
+                    self.log("🔒 trusted certificate expiring soon — "
+                             "renewing in the background")
+                    self.provision_trusted()
+                self.log(f"🔒 serving trusted HTTPS for "
+                         f"{self.settings.acme_domain}")
+            else:
+                from .localca import ensure_ca, load_ca, issue_leaf
+                ca_cert_p, ca_key_p = ensure_ca(cert_dir)
+                ca_cert, ca_key = load_ca(ca_cert_p, ca_key_p)
+                leaf_c, leaf_k = issue_leaf(ca_cert, ca_key, self.lan_ips(),
+                                            cert_dir / "server.crt",
+                                            cert_dir / "server.key")
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(str(leaf_c), str(leaf_k))
+            srv = make_server(self.settings.host, self.settings.https_port, app,
+                              threaded=True)
+            srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+            self._https_server = srv
+            self._https_thread = threading.Thread(
+                target=srv.serve_forever, name="optibubble-https", daemon=True)
+            self._https_thread.start()
+            self.log(f"🔒 HTTPS bridge ready on :{self.settings.https_port} "
+                     "(live mobile camera)")
+        except Exception as e:
+            self._https_server = None
+            self.log(f"⚠ HTTPS bridge unavailable ({e}) — the scanner falls "
+                     "back to the native camera app", "warn")
 
     def stop_server(self) -> None:
+        if self._https_server is not None:
+            self._https_server.shutdown()
+            self._https_server = None
         if self._server is not None:
             self._server.shutdown()
             self._server = None
             self.emit("server_stopped")
+
+    @property
+    def https_running(self) -> bool:
+        return self._https_server is not None
+
+    def cert_url(self, ip: Optional[str] = None) -> str:
+        ip = ip or self.lan_ips()[0]
+        return f"http://{ip}:{self.settings.port}/cert"
+
+    def https_url(self, ip: Optional[str] = None) -> str:
+        if not self.test:
+            return ""
+        host = ip or self.lan_ips()[0]
+        from .acme import trusted_cert_valid
+        tc, _ = self.trusted_cert_paths()
+        if (self.settings.https_mode == "letsencrypt"
+                and self.settings.acme_domain and trusted_cert_valid(tc, 0)):
+            host = self.settings.acme_domain
+        return (f"https://{host}:{self.settings.https_port}/scan/"
+                f"{self.test.session_token}")
 
     @property
     def server_running(self) -> bool:

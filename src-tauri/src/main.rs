@@ -23,8 +23,29 @@ fn backend_up() -> bool {
     TcpStream::connect((HOST, PORT)).is_ok()
 }
 
+fn bundled_engine() -> Option<std::path::PathBuf> {
+    // release installers ship the frozen engine under resources/engine/
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) { "optibubble-engine.exe" } else { "optibubble-engine" };
+    let exe_dir = exe.parent()?;
+    [
+        exe_dir.join("engine").join(name),            // windows / linux bundle
+        exe_dir.join("../Resources/engine").join(name), // macOS .app bundle
+        exe_dir.join("../../Resources/engine").join(name),
+        exe_dir.join(name),                           // portable layouts
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+}
+
 fn spawn_backend() -> Option<Child> {
-    // python3 first (Linux/macOS), then python (Windows / venvs)
+    // 1 · the frozen engine bundled with the installer (no Python needed)
+    if let Some(engine) = bundled_engine() {
+        if let Ok(child) = Command::new(&engine).arg("--no-browser").spawn() {
+            return Some(child);
+        }
+    }
+    // 2 · fall back to a system python (developer machines)
     for exe in ["python3", "python"] {
         if let Ok(child) = Command::new(exe)
             .args(["main.py", "--no-browser"])

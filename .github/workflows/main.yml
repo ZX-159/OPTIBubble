@@ -25,7 +25,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (25→29 checks)
+    name: Self-test (43 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +40,21 @@ jobs:
 
       - name: Run the end-to-end self-test
         run: python selftest.py
+
+  # ------------------------------------------------ Rust shell compiles? ---
+  rust-check:
+    name: Rust shell (cargo check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux system dependencies (WebKit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file pkg-config
+      - name: cargo check (src-tauri)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
 
   # ------------------------------------------------- release: native shells -
   tauri:
@@ -76,6 +91,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Freeze the Python engine (single self-contained binary)
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller optibubble.spec --distpath src-tauri/engine \
+            --workpath build-engine --noconfirm
 
       - name: Build bundles & attach to the draft release
         uses: tauri-apps/tauri-action@v0

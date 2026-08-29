@@ -44,7 +44,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 29/29 checks passed · ALL GREEN
+python selftest.py                 # expect: 46/46 checks passed · ALL GREEN
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -128,6 +128,105 @@ flatpak-builder --repo=.flatpak-repo --force-clean \
 flatpak build-bundle .flatpak-repo OPTIBubble.flatpak com.optibubble.app
 ```
 
+### 4.5 · The mobile-camera HTTPS problem — what works and why
+
+Mobile browsers hard-gate the in-page camera (`getUserMedia`) behind a *secure
+context* — there is no JavaScript workaround. The realistic options, ranked:
+
+| Approach | Student friction | Needs internet? | Verdict |
+|---|---|---|---|
+| **Trusted cert via Let's Encrypt DNS-01 + free DuckDNS domain** (built in: Settings → HTTPS mode → *Trusted*) | **none** — camera works in every browser, one QR scan | once at issuance (auto-renews ~30 days before expiry) | ✅ best UX — the Home Assistant pattern for local HTTPS |
+| Built-in local CA + code A install (built in, offline mode) | iOS: install profile + trust toggle (once). Android: Firefox or fallback | never | ✅ keep for fully offline classrooms |
+| Native-camera fallback (upload button) | none, but no live viewfinder | never | ✅ always available, automatic |
+| `chrome://flags` unsafely-treat-origin-as-secure | per-device flag fiddling | never | ❌ worse than a certificate |
+| ngrok / cloud tunnels | none | always on, traffic leaves the LAN | ❌ violates the no-cloud posture |
+| USB port-forward to `localhost` | cable + dev tools | never | ❌ not classroom-scale |
+
+#### How Trusted HTTPS mode actually works
+
+The browser demands a certificate *it already trusts* — so OPTIBubble gets a
+real one from Let's Encrypt, for a name **you** own (a free
+`yourclass.duckdns.org` subdomain) that points at your **private LAN IP**:
+
+1. You register the subdomain at duckdns.org and set its IP to this PC
+   (e.g. `192.168.1.20`). DuckDNS has an "update IP" page — pasting the LAN
+   IP is fine; public exposure is **not** required.
+2. On **Issue certificate**, the built-in ACME client (`optibubble/acme.py`,
+   ~250 lines on `cryptography`, no certbot):
+   - registers a Let's Encrypt account (key stored in `<data>/certs/`),
+   - opens an order for `yourclass.duckdns.org` and picks the **DNS-01**
+     challenge,
+   - asks DuckDNS (via your token) to publish the one-time
+     `_acme-challenge` **TXT record**,
+   - waits until the record is visible via DNS-over-HTTPS,
+   - finalises the order with a CSR and stores
+     `trusted-fullchain.pem` + `trusted-key.pem` locally.
+3. From then on the HTTPS bridge serves that certificate. Phones that scan
+   QR B open `https://yourclass.duckdns.org:5443/…` — the name resolves to
+   your LAN IP, the cert chains to a root every device already trusts, and
+   the browser grants the live camera with **zero prompts**.
+
+**Why no router changes:** DNS-01 proves domain ownership through the TXT
+record alone; Let's Encrypt never connects to your PC. Nothing is forwarded,
+nothing is reachable from outside, and the classroom traffic itself never
+leaves the Wi-Fi — only the one-time issuance and the ~quarterly renewal
+touch the internet.
+
+**Renewal:** certificates last 90 days; the engine re-issues automatically
+when fewer than 30 days remain (seen in the Scan & Serve log). Your
+DuckDNS name keeps pointing at the PC — if the PC's LAN IP ever changes,
+update it once at duckdns.org (no new certificate needed; the cert is for the
+*name*, not the IP).
+
+#### Step-by-step (one minute, once)
+
+1. Sign in at [duckdns.org](https://www.duckdns.org) (any GitHub/Google/etc.
+   account), create a subdomain, e.g. `myclass`, set its IP to this PC's LAN
+   address, and copy your **token** from the top of the page.
+2. OPTIBubble → **Settings → 🔒 HTTPS for the live camera** →
+   mode **Trusted · zero student setup** → fill *domain*, *token*, *email* →
+   **Issue certificate**. Watch the progress lines (contacting Let's Encrypt
+   → TXT published → waiting for propagation → ✔ issued). Takes ≤ 3 min,
+   dominated by DNS propagation.
+3. **Stop / Start** the server. QR B now shows
+   `https://myclass.duckdns.org:5443/…`, the topbar pill reads
+   `● https :5443 + http :5000`, and code A is hidden — students don't need it.
+
+**Verify it worked:** open the QR-B URL on any phone (or the teacher PC) —
+the padlock is clean with no warnings and the scanner shows the
+“🔒 Secure camera” chip. If anything fails, the log names the step (bad token,
+unreachable duckdns.org, propagation timeout) and the system simply keeps
+running the Local-CA HTTPS + HTTP fallbacks — nothing breaks.
+
+**Security notes:** the DuckDNS token is stored in plain text in
+`settings.json` (it can only update *your* subdomain's IP/TXT records — keep
+the file private anyway); the certificate key lives in `<data>/certs/`;
+and students' phones never need the token or any configuration.
+
+### 4.6 · Bundling — installers ship the whole engine (no Python needed)
+
+Release installers freeze the engine with PyInstaller (`optibubble.spec`) into
+a single `optibubble-engine` binary (~100–150 MB with OpenCV) that the Tauri
+shell spawns automatically — end users need **nothing** installed. The same
+`main.rs` falls back to `python3 main.py` on developer machines, so both modes
+coexist:
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller optibubble.spec --distpath src-tauri/engine --noconfirm
+cargo tauri build        # bundles src-tauri/engine/* into the installers
+```
+
+The Flatpak is self-contained by construction (the manifest pip-installs the
+engine into the sandbox at build time). Notes:
+
+- the frozen engine's first launch takes a few extra seconds (one-file
+  extraction); subsequent requests are normal speed;
+- keep `excludes` in the spec current when you add heavy dev dependencies;
+- PyOxidizer was considered and rejected (unmaintained, no current-Python
+  support); a full Rust port would shrink the binary but means rewriting a
+  tested engine — the frozen route keeps one codebase.
+
 ## 5 · Releasing via GitHub Actions
 
 The repo ships **one workflow**, `.github/workflows/main.yml`, that does both
@@ -177,9 +276,22 @@ git push origin main --tags
 
 ## 6 · The complete `main.yml` (verbatim)
 
-This is the exact file at `.github/workflows/main.yml` in the repo:
+This is the exact file at `.github/workflows/main.yml` in the repo —
+CI on every push/PR (self-test **+ Rust shell check**), installers on tags:
 
 ```yaml
+# ============================================================================
+# OPTIBubble — main.yml
+# One workflow: CI on every push/PR, release builds on tags (v*) or manual run.
+#
+#   push / pull_request  → job "selftest" only (fast, ~1 min)
+#   tag v* / dispatch    → selftest + installers for every platform:
+#                         Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
+#                         Linux AppImage + deb + RPM  ·  Flatpak bundle
+#
+# No secrets required. Release is created as a DRAFT — review and publish at
+# github.com/<you>/OPTIBubble/releases (see setup.md → "Cutting a release").
+# ============================================================================
 name: Build & Release
 
 on:
@@ -195,7 +307,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (29 checks)
+    name: Self-test (43 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -210,6 +322,21 @@ jobs:
 
       - name: Run the end-to-end self-test
         run: python selftest.py
+
+  # ------------------------------------------------ Rust shell compiles? ---
+  rust-check:
+    name: Rust shell (cargo check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux system dependencies (WebKit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file pkg-config
+      - name: cargo check (src-tauri)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
 
   # ------------------------------------------------- release: native shells -
   tauri:
@@ -247,13 +374,23 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Freeze the Python engine (single self-contained binary)
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller optibubble.spec --distpath src-tauri/engine \
+            --workpath build-engine --noconfirm
+
       - name: Build bundles & attach to the draft release
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: .
           tagName: v__VERSION__
           releaseName: "OPTIBubble v__VERSION__"
-          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM) plus a Flatpak bundle. The Python engine (pip install -r requirements.txt) is still required — see setup.md."
+          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Note: the Python engine (pip install -r requirements.txt) is still required on the target machine — see setup.md."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -327,7 +464,9 @@ inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
 | Actions release has no artifacts | check the *Actions* log — the release jobs only run on `v*` tags or manual dispatch |
 | Flatpak job fails | it needs the privileged container (already configured); try deleting the cache key and re-running |
 | Tauri window opens to an error page | the Python engine failed to start — run `python main.py` once to see why |
-| Port 5000 busy (macOS) | AirPlay Receiver uses 5000 — `python main.py --port 5050` |
+| Port 5000 busy (macOS) | AirPlay Receiver uses 5000 — `python main.py --port 5050` (HTTPS bridge: `https_port` in Settings) |
+| Phone still warns after certificate install | Android Chrome ignores user CAs — use Firefox, or the 🖼️ upload fallback; also check the IP selector matches the phone's network |
+| HTTPS bridge not starting | port 5443 busy or `cryptography` missing → see the log card; the HTTP scanner + native-camera fallback keep working |
 | Self-test fails locally | reinstall deps (`pip install -r requirements.txt`) — OpenCV/numpy version mismatch is the usual cause |
 
 ---

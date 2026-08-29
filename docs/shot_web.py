@@ -44,6 +44,7 @@ hub._process("shot-a", make_photo("2041986"))
 hub._process("shot-b", make_photo("2041987", blank_q=9, faint_q=14))
 hub._process("shot-c", make_photo("2041988"))
 hub._process("shot-d", make_photo("2041990", blank_q=4, faint_q=17))
+hub.log("Answer key updated — 24/24 defined")
 hub.log("Server listening on http://192.168.1.20:5000")
 hub.log("✔ Sheet 204100 graded — 24/24 · 81 ms")
 hub.log("⚑ Sheet 204102 flagged (2 item(s)) → review queue")
@@ -96,14 +97,16 @@ with sync_playwright() as p:
     snap("07-help.png")
 
     # mobile page
-    mob = browser.new_page(viewport={"width": 390, "height": 844},
-                           device_scale_factor=2, is_mobile=True,
-                           has_touch=True, user_agent=
+    ctx = browser.new_context(viewport={"width": 390, "height": 844},
+                              device_scale_factor=2, is_mobile=True,
+                              has_touch=True, ignore_https_errors=True,
+                              user_agent=
                            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
                            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
                            "Mobile/15E148 Safari/604.1")
+    mob = ctx.new_page()
     mob.on("console", lambda m: errors.append("MOBILE: " + m.text) if m.type == "error" else None)
-    mob.goto(hub.magic_url("127.0.0.1").replace("192.168.1.20", "127.0.0.1"),
+    mob.goto(hub.https_url("127.0.0.1"),
              wait_until="networkidle")
     time.sleep(0.6)
     mob.screenshot(path=str(OUT / "08-mobile-scanner.png"))

@@ -1,4 +1,5 @@
 # OPTIBubble — runtime dependencies (the whole app is local-first Python)
+cryptography>=41        # local CA for the HTTPS mobile camera bridge
 flask>=3.0
 numpy>=1.24
 opencv-python>=4.8

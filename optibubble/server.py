@@ -68,6 +68,17 @@ def create_app(hub: Hub) -> Flask:
             p = _web_path("", name)
         return send_file(p, conditional=True)
 
+    @app.route("/api/https/provision", methods=["POST"])
+    def https_provision():
+        s = hub.settings
+        if s.https_mode != "letsencrypt" or not s.acme_domain \
+                or not s.duckdns_token:
+            return jsonify({"ok": False,
+                            "error": "Set the HTTPS mode to Trusted and fill "
+                                     "the domain + DuckDNS token first."}), 400
+        hub.provision_trusted()
+        return jsonify({"ok": True, "domain": s.acme_domain})
+
     @app.route("/api/reveal", methods=["POST"])
     def reveal():
         """Open the data folder in the OS file manager (local desktops only)."""
@@ -87,8 +98,43 @@ def create_app(hub: Hub) -> Flask:
 
     @app.route("/api/qr.png")
     def qr_png():
-        ip = request.args.get("ip") or None
-        return Response(hub.magic_qr_png(ip), mimetype="image/png")
+        import io as _io
+        import qrcode as _qrcode
+        url = request.args.get("url")
+        if not url:
+            ip = request.args.get("ip") or None
+            url = hub.magic_url(ip)
+        img = _qrcode.make(url or "http://optibubble.local", box_size=12,
+                           border=2).convert("RGB")
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return Response(buf.getvalue(), mimetype="image/png")
+
+    # ------------------------------------------------- local CA / HTTPS help
+    @app.route("/cert")
+    def cert_page():
+        return Response(_cert_landing(hub), mimetype="text/html")
+
+    @app.route("/cert/ca.crt")
+    def cert_download():
+        p = hub.data_dir / "certs" / "optibubble-ca.crt"
+        if not p.exists():
+            abort(404)
+        return send_file(p, mimetype="application/x-x509-ca-cert",
+                         as_attachment=True, download_name="OPTIBubble-CA.crt")
+
+    @app.route("/cert/ca.mobileconfig")
+    def cert_ios():
+        from .localca import ios_mobileconfig
+        p = hub.data_dir / "certs" / "optibubble-ca.crt"
+        if not p.exists():
+            abort(404)
+        import tempfile
+        tmp = Path(tempfile.gettempdir()) / "optibubble-ca.mobileconfig"
+        tmp.write_bytes(ios_mobileconfig(p))
+        return send_file(tmp, mimetype="application/x-apple-aspen-config",
+                         as_attachment=True,
+                         download_name="OPTIBubble-CA.mobileconfig")
 
     # ----------------------------------------------------------- pages
     @app.route("/")
@@ -123,14 +169,14 @@ def create_app(hub: Hub) -> Flask:
             student_id_digits=int(d.get("student_id_digits", 7)),
             page_size=(d.get("page_size") or "a4").lower(),
             sheet_instructions=d.get("sheet_instructions", "")[:240],
+            write_in_fields=d.get("write_in_fields", "Name,Class,Date"),
             header_font_scale=float(d.get("header_font_scale", 1.0) or 1.0),
             logo_position=d.get("logo_position", "left"),
             answer_key={int(q): a for q, a in (d.get("answer_key") or {}).items()})
         errs = cfg.validate()
+        if errs:
+            return jsonify({"errors": errs}), 400
         missing = cfg.num_questions - len(cfg.answer_key)
-        if errs or missing > 0:
-            return jsonify({"errors": errs or [
-                f"Answer key incomplete — {missing} question(s) missing."]}), 400
         try:
             hub.create_test(cfg, generate_pdf=True)
         except Exception as e:
@@ -139,7 +185,17 @@ def create_app(hub: Hub) -> Flask:
         for w in (hub.layout.warnings if hub.layout else []):
             hub.log(f"ℹ {w}")
         return jsonify({"ok": True, "test_id": cfg.test_id,
+                        "missing_key": missing,
                         "warnings": (hub.layout.warnings if hub.layout else [])})
+
+    @app.route("/api/key", methods=["POST"])
+    def update_key():
+        d = request.get_json(silent=True) or {}
+        ok = hub.update_key(d.get("entries") or {})
+        return jsonify({"ok": ok,
+                        "defined": len(hub.test.answer_key) if hub.test else 0,
+                        "total": hub.test.num_questions if hub.test else 0}
+                       ), (200 if ok else 404)
 
     @app.route("/api/tests/<test_id>/open", methods=["POST"])
     def open_test(test_id: str):
@@ -289,3 +345,54 @@ def create_app(hub: Hub) -> Flask:
             mimetype="text/html"), 404
 
     return app
+
+
+def _cert_landing(hub) -> str:
+    https = hub.https_url() or "https://<teacher-ip>:" + str(hub.settings.https_port)
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enable the live camera — OPTIBubble</title>
+<style>
+body{{margin:0;background:#0C0D11;color:#EAEBEF;font-family:'Open Sans',system-ui,sans-serif;
+line-height:1.55;font-size:14px}}
+main{{max-width:520px;margin:0 auto;padding:26px 18px 40px}}
+h1{{font-size:17px;margin:8px 0 4px}}
+.step{{background:#131419;border-radius:6px;padding:14px 16px;margin:10px 0}}
+.step b{{color:#FF7448}}
+a.btn{{display:block;text-align:center;text-decoration:none;background:#FF5A2D;color:#160B06;
+font-weight:800;padding:12px;border-radius:5px;margin:10px 0 6px}}
+small{{color:#8B99B0;display:block;margin-top:4px}}
+ol{{padding-left:20px;color:#A3A6B1}} ol b{{color:#EAEBEF}}
+</style></head><body><main>
+<p style="letter-spacing:.18em;font-size:10px;color:#686C79;font-weight:800">OPTIBubble · Secure Camera</p>
+<h1>Unlock the live viewfinder 🔒</h1>
+<p style="color:#A3A6B1">Your browser only allows in-page cameras on secure
+connections. Install the teacher's local certificate once — it takes under a
+minute — then every future scan opens the live camera automatically.</p>
+
+<div class="step"><b>iPhone / iPad</b>
+  <ol><li>Tap <b>Install profile</b> below, allow the download.</li>
+      <li>Open <b>Settings</b> → the <b>Profile Downloaded</b> banner → <b>Install</b>
+          (enter passcode if asked).</li>
+      <li>Settings → <b>General</b> → <b>About</b> → <b>Certificate Trust Settings</b> →
+          enable <b>OPTIBubble Local CA</b>.</li></ol>
+  <a class="btn" href="/cert/ca.mobileconfig">Install profile</a>
+</div>
+
+<div class="step"><b>Android</b>
+  <ol><li>Download the certificate below.</li>
+      <li>Settings → <b>Security</b> → <b>Install a certificate</b> → <b>CA certificate</b>
+          → pick <b>OPTIBubble-CA.crt</b> (looks scary; it is your teacher's own
+          classroom server).</li>
+      <li>Chrome may still refuse user CAs — if the camera stays black, use
+          <b>Firefox</b> (honours user certificates) or the 🖼️ upload button,
+          which always works.</li></ol>
+  <a class="btn" href="/cert/ca.crt">Download certificate</a>
+</div>
+
+<div class="step"><b>Done?</b> Scan the second QR code (white card, “live camera”)
+or open:<br><code style="color:#FF7448;word-break:break-all">{https}</code>
+<small>Only devices on this classroom Wi-Fi can reach this server. Removing the
+certificate after class: Settings → Profiles / credential storage.</small>
+</div>
+</main></body></html>"""

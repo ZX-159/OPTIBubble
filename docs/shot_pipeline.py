@@ -7,7 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from selftest import render_pdf, fill_bubble, simulate_photo, encode_jpeg
 from optibubble.config import TestConfig, AdvancedSettings
 from optibubble.sheet_generator import generate_sheet_pdf
-from optibubble.omr_engine import find_page_corners, warp_page, dark_ratio_map, _decide_group
+from optibubble.omr_engine import (find_page_corners, warp_page, measure_bubbles,
+                                   relative_map, _decide_group)
 
 GREEN, RED, AMBER, WHITE_B = (34, 197, 94), (239, 68, 68), (245, 158, 11), (255, 255, 255)
 
@@ -67,7 +68,8 @@ cv2.putText(p1, "1  detect corner squares", (30, 60), cv2.FONT_HERSHEY_SIMPLEX,
             1.5, WHITE_B, 4, cv2.LINE_AA)
 
 warp = warp_page(photo, corners, lay, S)
-ratios, th = dark_ratio_map(cv2.cvtColor(warp, cv2.COLOR_BGR2GRAY), lay, S)
+gm, black, _th = measure_bubbles(cv2.cvtColor(warp, cv2.COLOR_BGR2GRAY), lay, S)
+ratios = relative_map(lay, gm, black)
 scale = S.warp_width_px / lay.page_w
 p3 = warp.copy()
 for qn in range(1, lay.num_questions + 1):

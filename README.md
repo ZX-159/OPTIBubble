@@ -9,9 +9,9 @@ Print dynamic answer sheets → students photograph them with **any phone browse
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Tauri 2](https://img.shields.io/badge/native%20shell-Tauri%202-FFC131?logo=tauri&logoColor=white)](#-native-app-tauri-optional)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-425466)](#-platform-support)
-[![License: MIT](https://img.shields.io/badge/license-MIT-22C55E.svg)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-22C55E.svg)](LICENSE)
 [![Privacy](https://img.shields.io/badge/privacy-100%25%20local%2C%20no%20cloud-3B82F6)](#-privacy)
-[![Self-test](https://img.shields.io/badge/self--test-29%2F29%20green-22C55E)](#-development)
+[![Self-test](https://img.shields.io/badge/self--test-46%2F46%20green-22C55E)](#-development)
 
 *No Scantron hardware. No cloud subscription. No app store. No student data leaving the room.*
 
@@ -51,8 +51,9 @@ applied to the embedded wordmark and the header rule.
 | | |
 |---|---|
 | 🖨 **Dynamic sheet generator** | 2–102 questions, 2–5 options (A–B … A–E), auto multi-column layout, up to 10-digit student-ID grid, session QR code, four machine-vision alignment anchors. A4 & US Letter. |
-| ✏️ **Sheet designer** | Editable title, custom instructions, header text size (80–140 %) and wordmark side — all inside the header, with **auto-shrink instead of overlap** and a layout validator that proves every sheet is collision-free before printing. The OPTIBubble wordmark prints in **#2e5a99** (white on dark media). |
-| 📱 **Mobile web bridge** | A magic QR link opens a premium scanner page in the phone's browser — live viewfinder with alignment overlay, torch, client-side quality check, upload progress and instant score feedback. iOS & Android. |
+| ✏️ **Sheet designer** | Editable title, custom instructions, header text size (80–140 %), wordmark side and **handwritten write-in fields** (Name/Class/Date…, ignored by the scanner) — all inside the header, with **auto-shrink instead of overlap** and a header layout that is *proven* collision-free before the PDF is written. The OPTIBubble wordmark prints in **#2e5a99** (white on dark media). |
+| 🔑 **Print-first workflow** | Create and print sheets with a partial (or empty) answer key; finish the key later on the Scan & Serve page — grading scores whatever is already defined. |
+| 📱 **Mobile web bridge + HTTPS** | A QR link opens a premium scanner page — live viewfinder, torch, quality check, instant feedback. Two HTTPS modes: **Trusted (zero student setup)** — built-in Let's Encrypt client issues a publicly-trusted cert for your free `*.duckdns.org` domain via DNS-01, so the camera just works in any browser; or **Local CA (fully offline)** — students scan code A once. iOS & Android. |
 | 🔍 **Real OMR pipeline** | Otsu binarisation → anchor-square contour detection (on a downscaled raster for speed) → perspective warp → per-bubble dark-pixel-density analysis with a confidence model. A typical photo grades in **~80 ms** on a laptop CPU; long sessions are bounded (capped receipts, cached CSV reads, no leaked queues). |
 | ⚑ **Confidence flagging** | Unanswered, double-marked and faint/partially-erased marks are flagged and shown as zoomable crops — one click to override and export. |
 | 🖥 **Modern desktop UI** | A premium web app served by the engine itself (dashboard → review → export), wrapped in a native window by the bundled **Tauri 2** shell — or just run it in your browser. |
@@ -153,7 +154,7 @@ python selftest.py
 Builds a sheet, simulates filled bubbles (pen strokes, partial marks), synthesises phone
 photos (perspective jitter, brightness gradients, sensor noise, JPEG artefacts) across
 random seeds, and asserts exact scores, flag types, student-ID reads, the full HTTP
-stack and the < 3 s latency budget — **29 checks, expect all green**.
+stack and the < 3 s latency budget — **46 checks, expect all green**.
 
 ### 3 · Launch
 
@@ -194,9 +195,11 @@ python main.py --selftest        # end-to-end verification
 
 Prefer a real desktop window with its own icon, taskbar entry and installers?
 The repo ships a **Tauri 2** shell in `src-tauri/` that wraps the exact same UI,
-and one GitHub Actions workflow (`.github/workflows/main.yml`) producing **Windows
-MSI/NSIS, macOS dmg (Intel + Apple Silicon), Linux AppImage, deb, RPM and a
-Flatpak** on every `v*` tag:
+One GitHub Actions workflow (`.github/workflows/main.yml`) **freezes the Python
+engine into a self-contained binary with PyInstaller** and produces fully
+self-contained installers on every `v*` tag — **Windows MSI/NSIS, macOS dmg
+(Intel + Apple Silicon), Linux AppImage, deb, RPM and a Flatpak**. End users
+install and run — no Python, no pip, no setup:
 
 ```bash
 cargo install tauri-cli --version "^2"
@@ -229,6 +232,50 @@ works with **zero internet access**.
 
 ---
 
+## 🔒 Trusted HTTPS — the live camera with zero student setup
+
+**The problem.** Mobile browsers only allow the in-page camera
+(`getUserMedia`) inside a *secure context* (HTTPS). A self-signed certificate
+works, but every student phone has to install and trust it first — clunky on
+iOS, genuinely painful on Android.
+
+**The fix OPTIBubble ships: a publicly-trusted certificate for a name that
+points at your own LAN.** The app contains a tiny built-in Let's Encrypt
+client (no certbot, nothing to install) that proves control of a **free
+`yourclass.duckdns.org`** subdomain via the **DNS-01 challenge** and issues a
+real, browser-trusted certificate for it.
+
+Why this gives every phone the live camera with **no per-student setup**:
+
+```
+duckdns.org  :  yourclass.duckdns.org  →  192.168.1.20   (your PC, private LAN IP)
+Let's Encrypt:  issues a cert for "yourclass.duckdns.org"  (trusted by every browser)
+phones       :  scan QR B → https://yourclass.duckdns.org:5443/scan/…
+                → resolves straight to your PC on the classroom Wi-Fi 🔒 live camera
+```
+
+* **No ports to open, no router changes** — the DNS-01 challenge proves domain
+  ownership through a TXT record, so your PC never has to be reachable from
+  the internet.
+* **Scans never leave the room** — only the (one-time) issuance and occasional
+  renewal talk to the internet; photos and results stay on the LAN.
+* **Automatic renewal** ~30 days before the 90-day certificate expires.
+
+**Setup — one minute, once, on the teacher PC only** (details in
+[`setup.md` §4.5](setup.md)):
+
+1. Create a free subdomain at [duckdns.org](https://www.duckdns.org) and point
+   it at this PC's LAN IP.
+2. Settings → *HTTPS for the live camera* → mode **Trusted** → paste the
+   domain + DuckDNS token → **Issue certificate** (~2–3 min, once).
+3. Restart the server — QR B now carries the `https://…duckdns.org` link.
+
+**No internet in the classroom?** Leave HTTPS mode on *Local CA* (students
+scan code A once to trust your PC; Android users should use Firefox), or rely
+on the native-camera upload fallback that works everywhere regardless.
+
+---
+
 ## 🧠 The OMR engine
 
 1. **Validate** — resolution and exposure checks with actionable error codes
@@ -239,15 +286,21 @@ works with **zero internet access**.
 3. **Flatten** — perspective transform onto a canonical raster (width configurable,
    default 1600 px). A post-warp anchor darkness check catches bad alignments
    (`WARP_FAILED`).
-4. **Measure** — dark-pixel ratio inside the inner disc of every bubble (inner-sampling
+4. **Measure** — mean grey inside the inner disc of every bubble (inner-sampling
    radius configurable, so printed outlines never count).
-5. **Decide** — per question:
+5. **Normalise** — every bubble is scored *relative to its own row*: the
+   brightest sibling is unmarked paper under the same lighting, and the printed
+   anchors define black — so scores sit on a stable 0 (= empty) … 1 (= ink)
+   scale whether the photo is bright, dim or half in shadow.
+6. **Verify** — connected-component analysis on each “filled” bubble: a real
+   stroke is one large blob; a smudge is many tiny ones → review, not grade.
+7. **Decide** — per question:
    * top density `< t_blank` → **blank**
    * top density `< t_fill` → **faint** (stray mark)
    * second density ≥ `max(t_fill, top × multi_ratio)` → **double-marked**
    * top density `< faint_upper` → **faint** (light pen / partial erase)
    * otherwise → confident, auto-graded
-6. **Export** — verified sheets append to CSV instantly; flagged sheets wait for you.
+8. **Export** — verified sheets append to CSV instantly; flagged sheets wait for you.
 
 Every threshold above is a live control in **Settings → OMR engine**.
 
@@ -315,7 +368,7 @@ Start the server on the <b>Scan & Serve</b> page. Students open the standard cam
 <details>
 <summary><b>The phone shows a camera error / black view — why?</b></summary>
 
-Browsers only allow the live in-page camera on secure (HTTPS) or localhost pages. On a plain LAN address OPTIBubble automatically falls back to the phone's native camera app via the upload button — photos taken that way are graded exactly the same.
+Browsers only allow the in-page camera on HTTPS pages. The zero-setup fix is **Trusted HTTPS mode** (see the section above): a built-in Let's Encrypt client issues a real certificate for your free `*.duckdns.org` domain, so every phone gets the live camera after one QR scan — no installs. Fully offline instead? Use *Local CA* mode: students scan **code A** once to trust your PC (iOS: profile install; Android: use Firefox), then **code B** opens the live scanner. And if neither is set up, the scanner automatically falls back to the phone's native camera app — those photos are graded exactly the same.
 </details>
 <details>
 <summary><b>What pens or pencils work best?</b></summary>
@@ -393,7 +446,7 @@ Yes — the bundled Tauri 2 shell (<code>src-tauri/</code>) wraps the same UI in
 ```
 OPTIBubble/
 ├── main.py                  # launcher (app / --serve / --demo / --selftest)
-├── selftest.py              # 29-check end-to-end verification suite
+├── selftest.py              # 46-check end-to-end verification suite
 ├── setup.md                 # setup · local builds · GitHub · Actions releases
 ├── make_assets.py           # regenerates logo/brand assets from bundled fonts
 ├── requirements.txt
@@ -441,7 +494,7 @@ page — the entire system runs from this computer and the Wi-Fi router in your 
 
 ```bash
 pip install -r requirements-dev.txt
-python selftest.py              # 29-check end-to-end suite
+python selftest.py              # 46-check end-to-end suite
 python make_assets.py           # regenerate brand assets from the bundled fonts
 python tools/otf2ttf.py         # re-convert the wordmark OTF → embeddable TTF
 python docs/shot_pipeline.py    # rebuild the pipeline figure
@@ -455,7 +508,7 @@ python docs/shot_web.py         # headless-browser UI screenshots (Playwright)
 - **[OPTIBubbleDoubleBold](https://www.ffonts.net/OPTIBubbleDoubleBold.font)** — the wordmark typeface (Castcraft OPTI collection), bundled for the logo.
 - **[Open Sans](https://fonts.google.com/specimen/Open+Sans)** by Steve Matteson — UI/web font, [SIL OFL 1.1](https://openfontlicense.org).
 - Built with [OpenCV](https://opencv.org), [ReportLab](https://www.reportlab.com), [Flask](https://flask.palletsprojects.com), [qrcode](https://github.com/lincolnloop/python-qrcode), [Pillow](https://python-pillow.org), [PyMuPDF](https://pymupdf.readthedocs.io), [Tauri](https://tauri.app).
-- Application code: **MIT** — see [LICENSE](LICENSE).
+- Application code: **GPL-3.0** — see [LICENSE](LICENSE). The bundled fonts keep their own licences (Open Sans: SIL OFL; OPTIBubbleDoubleBold: freeware).
 
 <div align="center">
 

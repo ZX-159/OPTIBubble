@@ -113,6 +113,7 @@ input[type=file]{display:none}
 <body>
 <header>
   <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" onerror="this.style.display='none'">
+  <div class="chip" id="secChip" style="display:none">🔒 Secure camera</div>
   <div class="chip" id="netChip"><span class="dot"></span>Connected</div>
 </header>
 
@@ -185,6 +186,8 @@ const token=location.pathname.split("/").pop();
 let stream=null,track=null,torchOn=false,capturedBlob=null;
 let count=+(localStorage.getItem("ob_"+token)||0);$("counter").textContent=count;
 let CFG={quality:0.92,width:2048};
+if(window.isSecureContext){const c=$("secChip");c.style.display="flex";}
+else{$("netChip").title="HTTP mode — live camera unavailable";}
 
 /* ---------- info ---------- */
 fetch("/api/info/"+token).then(r=>r.json()).then(d=>{
@@ -202,6 +205,13 @@ function show(id){for(const v of["steps","cameraView","confirmView","uploadView"
 
 /* ---------- camera ---------- */
 async function startCamera(){
+  if(!window.isSecureContext){
+    // plain HTTP → the browser forbids the in-page camera. Point the student
+    // at the one-time certificate (code A) and use the native fallback for now.
+    $("hint").innerHTML="Live camera needs HTTPS — ask the teacher for code A "+
+      '(<a href="/cert" style="color:#FF7448">enable it once</a>), or use the '+
+      "upload button which always works.";
+  }
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},
       width:{ideal:CFG.width},height:{ideal:Math.round(CFG.width*0.75)}},audio:false});

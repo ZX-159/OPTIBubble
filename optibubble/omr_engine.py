@@ -33,7 +33,10 @@ import cv2
 import numpy as np
 
 from .config import AdvancedSettings, LETTERS, TestConfig
-from .layout import (ID_DIGITS_X0, ID_ROW_PITCH, ID_VALUE_PITCH, SheetLayout)
+from .layout import (ANCHOR_SIZE, ID_DIGITS_X0, ID_ROW_PITCH, ID_VALUE_PITCH,
+                     SheetLayout)
+
+ANCHOR_REF_R_MM = ANCHOR_SIZE * 0.35   # inner core of a solid anchor square
 
 
 # ----------------------------------------------------------------------------
@@ -146,7 +149,10 @@ def find_page_corners(gray: np.ndarray) -> np.ndarray:
     else:
         small = gray
 
-    blur = cv2.GaussianBlur(small, (5, 5), 0)
+    # CLAHE equalises harsh illumination gradients before binarisation, so a
+    # shadow across one corner cannot hide or merge the alignment squares
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    blur = cv2.GaussianBlur(clahe.apply(small), (5, 5), 0)
     _, bw = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     contours, _ = cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -220,42 +226,122 @@ def warp_page(img: np.ndarray, corners: np.ndarray, lay: SheetLayout,
 
 
 # ----------------------------------------------------------------------------
-# Bubble measurement
+# Bubble measurement — lighting-adaptive, grid-relative
 # ----------------------------------------------------------------------------
-def dark_ratio_map(warped_gray: np.ndarray, lay: SheetLayout,
-                   s: AdvancedSettings) -> Tuple[Dict[str, float], int]:
-    """Dark-pixel ratio inside the inner disc of every bubble."""
-    th, _ = cv2.threshold(warped_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    th = int(np.clip(th, 90, 190)) + s.dark_threshold_offset
-    dark = (warped_gray < th).astype(np.uint8)
-
-    scale = s.warp_width_px / lay.page_w
-    ratios: Dict[str, float] = {}
-    for b in lay.bubbles:
-        cx, cy = b.cx * scale, b.cy * scale
-        r = max(3.0, b.r * scale * s.inner_sample)
-        x0, x1 = int(cx - r), int(cx + r) + 1
-        y0, y1 = int(cy - r), int(cy + r) + 1
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(warped_gray.shape[1], x1), min(warped_gray.shape[0], y1)
-        if x1 <= x0 or y1 <= y0:
-            ratios[_key(b)] = 0.0
-            continue
-        roi_d = dark[y0:y1, x0:x1]
-        h, w = roi_d.shape
-        yy, xx = np.mgrid[0:h, 0:w]
-        mask = ((xx + x0 - cx) ** 2 + (yy + y0 - cy) ** 2) <= r * r
-        total = int(mask.sum())
-        ratios[_key(b)] = (float(roi_d[mask].sum()) / total) if total else 0.0
-    return ratios, th
-
-
 def _key(b) -> str:
     if b.kind == "option":
         return f"o{b.q}:{b.option}"
     if b.kind == "digit":
         return f"d{b.digit}:{b.value}"
     return f"p{b.bit}"
+
+
+
+def measure_bubbles(warped_gray: np.ndarray, lay: SheetLayout,
+                    s: AdvancedSettings) -> Tuple[Dict[str, float], float, int]:
+    """Mean gray of the inner disc of every bubble + the printed-ink reference.
+
+    Returns ``(gray_map, anchor_black, otsu)`` where ``anchor_black`` is the
+    darkest alignment-square core — a per-photo *printed black* reference that
+    follows the actual exposure of the sheet.
+    """
+    th, _ = cv2.threshold(warped_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    th = int(np.clip(th, 90, 190)) + s.dark_threshold_offset
+
+    scale = s.warp_width_px / lay.page_w
+    gray_map: Dict[str, float] = {}
+    for b in lay.bubbles:
+        gray_map[_key(b)] = _disc_mean(warped_gray, b.cx * scale, b.cy * scale,
+                                       b.r * scale * s.inner_sample)
+
+    # printed-ink reference: the darkest of the four solid anchor cores
+    anchor_means = []
+    for (ax, ay) in lay.anchors:
+        m = _disc_mean(warped_gray, ax * scale, ay * scale,
+                       (ANCHOR_REF_R_MM * scale))
+        if m is not None:
+            anchor_means.append(m)
+    anchor_black = float(min(anchor_means)) if anchor_means else 60.0
+    return gray_map, anchor_black, th
+
+
+def _disc_mean(img: np.ndarray, cx: float, cy: float, r: float) -> Optional[float]:
+    x0, x1 = int(cx - r), int(cx + r) + 1
+    y0, y1 = int(cy - r), int(cy + r) + 1
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(img.shape[1], x1), min(img.shape[0], y1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    roi = img[y0:y1, x0:x1].astype(np.float32)
+    h, w = roi.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    mask = ((xx + x0 - cx) ** 2 + (yy + y0 - cy) ** 2) <= r * r
+    total = int(mask.sum())
+    return float(roi[mask].mean()) if total else None
+
+
+def relative_map(lay: SheetLayout, gray_map: Dict[str, float],
+                 anchor_black: float) -> Dict[str, float]:
+    """Grid-relative fill scores, immune to exposure and local shadows.
+
+    Every bubble is scored against its own siblings — the brightest bubble in
+    the same question row / ID row is by definition *unmarked paper* under the
+    same lighting, and the printed anchors define *black*.  A score of 0 means
+    “as empty as its empty siblings”, 1 means “as dark as printed ink”, so a
+    shadow or a bright glare band shifts the reference with it instead of
+    breaking the decision.
+    """
+    rel: Dict[str, float] = {}
+    groups: Dict[str, list] = {}
+    for b in lay.bubbles:
+        if b.kind == "option":
+            groups.setdefault(f"q{b.q}", []).append(_key(b))
+        elif b.kind == "digit":
+            groups.setdefault(f"d{b.digit}", []).append(_key(b))
+        else:
+            groups.setdefault("p", []).append(_key(b))
+    for keys in groups.values():
+        grays = [gray_map[k] for k in keys if gray_map.get(k) is not None]
+        if not grays:
+            continue
+        white = max(grays)                    # brightest sibling ≈ local paper
+        span = max(white - anchor_black, 12.0)
+        for k in keys:
+            g = gray_map.get(k)
+            rel[k] = 0.0 if g is None else float(np.clip((white - g) / span, 0.0, 1.25))
+    return rel
+
+
+def stroke_coverage(warped_gray: np.ndarray, lay: SheetLayout, b,
+                    white_ref: float, anchor_black: float,
+                    s: AdvancedSettings) -> float:
+    """Largest connected dark component inside the bubble disc (CCA).
+
+    An intentional pen/pencil stroke is one large connected blob; a printer
+    smudge or a dust speck is many tiny ones.  Returns the largest component's
+    area as a fraction of the sampled disc.
+    """
+    scale = s.warp_width_px / lay.page_w
+    cx, cy, r = b.cx * scale, b.cy * scale, b.r * scale * 0.95
+    x0, x1 = max(0, int(cx - r)), min(warped_gray.shape[1], int(cx + r) + 1)
+    y0, y1 = max(0, int(cy - r)), min(warped_gray.shape[0], int(cy + r) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    roi = warped_gray[y0:y1, x0:x1]
+    t = white_ref - 0.35 * max(white_ref - anchor_black, 12.0)
+    mask = (roi < t).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    h, w = roi.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    disc = ((xx + x0 - cx) ** 2 + (yy + y0 - cy) ** 2) <= r * r
+    disc_area = float(disc.sum())
+    if disc_area <= 0:
+        return 0.0
+    best = 0.0
+    for i in range(1, n):
+        inside = float(((labels == i) & disc).sum())
+        best = max(best, inside / disc_area)
+    return best
 
 
 # ----------------------------------------------------------------------------
@@ -335,22 +421,27 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
             raise OMRReject("WARP_FAILED", "Page alignment check failed.",
                             "Flatten the sheet and reshoot from directly above.")
 
-    ratios, _th = dark_ratio_map(wgray, lay, s)
+    gray_map, anchor_black, _th = measure_bubbles(wgray, lay, s)
+    rel = relative_map(lay, gray_map, anchor_black)
 
     if s.save_debug_warp and debug_dir is not None:
         debug_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(debug_dir / f"warp_{int(time.time())}.png"), warped)
 
+    # questions without a key entry are excluded from scoring — the key can
+    # still be defined or completed after the sheets were printed
+    n_keyed = sum(1 for qn in range(1, lay.num_questions + 1)
+                  if qn in test.answer_key)
     result = GradeResult(sheet_id=uuid.uuid4().hex[:12],
                          ts=time.strftime("%Y-%m-%d %H:%M:%S"),
-                         max_score=test.num_questions)
+                         max_score=n_keyed)
     crops_dir = session_dir / "review" / "crops" / result.sheet_id
 
     # ---------------- student ID -------------------------------------------
     if lay.student_id_digits > 0:
         id_chars: List[str] = []
         for d in range(lay.student_id_digits):
-            dens = [ratios.get(f"d{d}:{v}", 0.0) for v in range(10)]
+            dens = [rel.get(f"d{d}:{v}", 0.0) for v in range(10)]
             marked, status, _c = _decide_group(dens, s.t_blank, s.t_fill,
                                                s.faint_upper, s.multi_ratio)
             if status in ("ok", "faint", "multi") and marked is not None:
@@ -376,9 +467,25 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
     correct: Dict[int, bool] = {}
 
     for qn in range(1, lay.num_questions + 1):
-        dens = [ratios.get(f"o{qn}:{oi}", 0.0) for oi in range(lay.options_per_question)]
+        dens = [rel.get(f"o{qn}:{oi}", 0.0) for oi in range(lay.options_per_question)]
         marked, status, conf = _decide_group(dens, s.t_blank, s.t_fill,
                                              s.faint_upper, s.multi_ratio)
+
+        # CCA guard: a “filled” score made of disconnected specks is a smudge,
+        # not a stroke — send it to review instead of grading it
+        if status == "ok" and marked is not None:
+            blk_q = lay.question_block(qn)
+            if blk_q is not None:
+                white_ref = max(gray_map.get(f"o{qn}:{oi}", 255.0)
+                                for oi in range(lay.options_per_question))
+                b_mark = next(bb for bb in lay.bubbles
+                              if bb.kind == "option" and bb.q == qn
+                              and bb.option == marked)
+                cov = stroke_coverage(wgray, lay, b_mark, white_ref,
+                                      anchor_black, s)
+                if cov < 0.12:
+                    status = "faint"
+
         confs.append(conf)
         letter = LETTERS[marked] if (marked is not None and status != "multi") else None
         answers[qn] = letter

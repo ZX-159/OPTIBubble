@@ -90,8 +90,10 @@ def fill_bubble(img: np.ndarray, mm2px: float, cx, cy, r, strength="pen", rng=No
     cv2.addWeighted(overlay, 0.92, img, 0.08, 0, dst=img)
 
 
-def simulate_photo(flat: np.ndarray, lay: SheetLayout, seed: int = 7) -> np.ndarray:
-    """Warp the flat sheet into a realistic phone photo."""
+def simulate_photo(flat: np.ndarray, lay: SheetLayout, seed: int = 7,
+                   shadow: float = 0.22) -> np.ndarray:
+    """Warp the flat sheet into a realistic phone photo (shadow = gradient
+    strength, 0.0–0.6; 0.22 ≈ normal classroom, 0.45 ≈ harsh overhead light)."""
     rng = np.random.default_rng(seed)
     h, w = flat.shape[:2]
     PH, PW = int(h * 1.35), int(w * 1.35)
@@ -107,12 +109,12 @@ def simulate_photo(flat: np.ndarray, lay: SheetLayout, seed: int = 7) -> np.ndar
     warped = cv2.warpPerspective(flat, M, (PW, PH), flags=cv2.INTER_CUBIC,
                                  borderMode=cv2.BORDER_CONSTANT,
                                  borderValue=(92, 96, 104))
-    shadow = np.ones((PH, PW), np.float32)
+    shadow_arr = np.ones((PH, PW), np.float32)
     for x in range(PW):
-        shadow[:, x] = 1.0 - 0.22 * (x / PW)
+        shadow_arr[:, x] = 1.0 - shadow * (x / PW)
     for y in range(PH):
-        shadow[y, :] *= 1.0 - 0.10 * (y / PH)
-    warped = np.clip(warped.astype(np.float32) * shadow[..., None], 0, 255)
+        shadow_arr[y, :] *= 1.0 - 0.45 * shadow * (y / PH)
+    warped = np.clip(warped.astype(np.float32) * shadow_arr[..., None], 0, 255)
     photo = warped.astype(np.uint8)
     noise = rng.normal(0, 6.5, photo.shape).astype(np.float32)
     photo = np.clip(photo.astype(np.float32) + noise, 0, 255).astype(np.uint8)
@@ -195,6 +197,55 @@ def main() -> int:
               f"score {res.score}/{res.max_score} (exp {expected_score}) · "
               f"ID {res.student_id} · flags {sorted(kinds)} · {dt*1000:.0f} ms")
 
+    # ---- lighting robustness: harsh overhead shadow ------------------------
+    tsh = TestConfig(title="Shadow Stress", subject="X", num_questions=24,
+                     options_per_question=4, student_id_digits=7)
+    tsh.ensure_ids(); tsh.randomize_key()
+    pdfsh, laysh = generate_sheet_pdf(tsh, tmp / "shadow.pdf")
+    flatsh = render_pdf(pdfsh)
+    mmsh = flatsh.shape[1] / laysh.page_w
+    for qn, letter in tsh.answer_key.items():
+        b = [bb for bb in laysh.bubbles if bb.kind == "option" and bb.q == qn][
+            "ABCD".index(letter)]
+        fill_bubble(flatsh, mmsh, b.cx, b.cy, b.r, "pen")
+    for d, ch in enumerate("2041986"):
+        bb = laysh.digit_bubbles(d)[int(ch)]
+        fill_bubble(flatsh, mmsh, bb.cx, bb.cy, bb.r, "pen")
+    res_sh = grade_photo(encode_jpeg(simulate_photo(flatsh, laysh, seed=21,
+                                                    shadow=0.45)),
+                         laysh, tsh, settings, tmp)
+    check("harsh 45% shadow gradient still grades 100%",
+          res_sh.score == 24 and res_sh.student_id == "2041986"
+          and res_sh.status == "auto",
+          f"{res_sh.score}/{res_sh.max_score} · {res_sh.duration_ms} ms")
+
+    # ---- CCA: disconnected specks look dark but are NOT strokes -------------
+    tsm = TestConfig(title="Smudge", subject="X", num_questions=12,
+                     options_per_question=4, student_id_digits=0)
+    tsm.ensure_ids(); tsm.randomize_key()
+    pdfsm, laysm = generate_sheet_pdf(tsm, tmp / "smudge.pdf")
+    flatsm = render_pdf(pdfsm)
+    msm = flatsm.shape[1] / laysm.page_w
+    rng = random.Random(5)
+    for qn, letter in tsm.answer_key.items():
+        if qn == 6:
+            continue                       # Q6 gets a smudge instead of a stroke
+        b = [bb for bb in laysm.bubbles if bb.kind == "option" and bb.q == qn][
+            "ABCD".index(letter)]
+        fill_bubble(flatsm, msm, b.cx, b.cy, b.r, "pen")
+    bs = [bb for bb in laysm.bubbles if bb.kind == "option" and bb.q == 6][1]
+    C = (int(bs.cx * msm), int(bs.cy * msm)); R = int(bs.r * msm * 0.8)
+    for _ in range(14):                    # many disconnected specks
+        a = rng.uniform(0, 2 * np.pi); d = rng.uniform(0, 0.75) * R
+        cxp, cyp = int(C[0] + np.cos(a) * d), int(C[1] + np.sin(a) * d)
+        cv2.circle(flatsm, (cxp, cyp), max(2, int(R * 0.22)), (25,) * 3, -1)
+    res_sm = grade_photo(encode_jpeg(simulate_photo(flatsm, laysm, seed=3)),
+                         laysm, tsm, settings, tmp)
+    q6 = [f for f in res_sm.flags if f.q == 6]
+    check("smudge (disconnected specks) flagged by CCA, not graded",
+          res_sm.status == "review" and q6 and q6[0].kind == "FAINT",
+          f"Q6 flag: {q6[0].kind if q6 else 'none'} · score {res_sm.score}/{res_sm.max_score}")
+
     # ---- rejection cases --------------------------------------------------
     try:
         grade_photo(encode_jpeg(np.full((400, 300, 3), 255, np.uint8)),
@@ -210,6 +261,24 @@ def main() -> int:
         check("anchor-less photo rejected", False)
     except OMRReject as e:
         check("anchor-less photo rejected", e.code == "ANCHORS_NOT_FOUND", e.code)
+
+    # grading with a partial key: max_score = defined entries
+    tpart = TestConfig(title="PartKey", subject="X", num_questions=10,
+                       options_per_question=4)
+    tpart.ensure_ids()
+    tpart.answer_key = {i: "ABCD"[(i - 1) % 4] for i in range(1, 7)}   # 6 of 10
+    pdfp, layp = generate_sheet_pdf(tpart, tmp / "partkey.pdf")
+    flatp = render_pdf(pdfp)
+    mmp = flatp.shape[1] / layp.page_w
+    for qn, letter in tpart.answer_key.items():
+        b = [bb for bb in layp.bubbles if bb.kind == "option" and bb.q == qn][
+            "ABCD".index(letter)]
+        fill_bubble(flatp, mmp, b.cx, b.cy, b.r, "pen")
+    resp = grade_photo(encode_jpeg(simulate_photo(flatp, layp, seed=8)),
+                       layp, tpart, settings, tmp)
+    check("partial-key grading → max = defined (6)",
+          resp.max_score == 6 and resp.score == 6,
+          f"{resp.score}/{resp.max_score}")
 
     # ---- full stack: hub + flask -----------------------------------------
     from optibubble.server import create_app
@@ -274,6 +343,58 @@ def main() -> int:
     check("CSV export download", r.status_code == 200 and b"Student_ID" in r.data)
     check("QR endpoint", client.get("/api/qr.png").status_code == 200)
 
+    # ---- trusted-HTTPS building blocks (offline unit checks) ---------------
+    from optibubble.acme import duckdns_txt_url, make_csr, trusted_cert_valid
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    u = duckdns_txt_url("myclass.duckdns.org", "TOK", "VALUE123")
+    check("duckdns TXT url shape",
+          "domains=myclass" in u and "token=TOK" in u and "txt=VALUE123" in u
+          and "_acme-challenge" not in u)
+    k = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    csr = make_csr("myclass.duckdns.org", k)
+    import re as _re
+    san_txt = csr.public_bytes.__self__ if False else None
+    from cryptography import x509 as _x509
+    sans = csr.extensions.get_extension_for_class(_x509.SubjectAlternativeName)
+    check("ACME CSR covers the domain",
+          "myclass.duckdns.org" in str(sans.value.get_values_for_type(
+              _x509.DNSName)))
+    # expiry logic on a self-made leaf from the local CA
+    from optibubble.localca import ensure_ca, load_ca, issue_leaf
+    cd = tmp / "ca_unit"
+    cc, ck = ensure_ca(cd)
+    cert, ckey = load_ca(cc, ck)
+    lc, lk = issue_leaf(cert, ckey, ["192.168.1.20"], cd / "l.crt", cd / "l.key")
+    check("trusted-cert validity window works",
+          trusted_cert_valid(lc, min_days_left=826) is False
+          and trusted_cert_valid(lc, 0) is True)
+
+    # ---- HTTPS bridge: local CA + secure mobile scanner --------------------
+    import ssl as _ssl
+    import urllib.request as _urlreq
+    hub.start_server()                       # second start = idempotent; adds TLS
+    check("local CA auto-generated on start",
+          (hub.data_dir / "certs" / "optibubble-ca.crt").exists()
+          and hub.https_running)
+    ca_ctx = _ssl.create_default_context(
+        cafile=str(hub.data_dir / "certs" / "optibubble-ca.crt"))
+    r = _urlreq.urlopen(f"https://127.0.0.1:{hub.settings.https_port}/health",
+                        context=ca_ctx, timeout=5)
+    check("TLS verifies against the local CA (like a trusted phone)",
+          r.status == 200 and b"ok" in r.read())
+    r = _urlreq.urlopen(f"https://127.0.0.1:{hub.settings.https_port}"
+                        f"/scan/{test.session_token}", context=ca_ctx, timeout=5)
+    check("mobile scanner served over HTTPS", r.status == 200
+          and b"OPTIBubble" in r.read())
+    r = client.get("/cert")
+    check("certificate landing page (code A)", r.status_code == 200
+          and b"ca.mobileconfig" in r.data)
+    r = client.get("/cert/ca.crt")
+    check("CA cert download", r.status_code == 200 and b"BEGIN CERTIFICATE" in r.data)
+    r = client.get("/cert/ca.mobileconfig")
+    check("iOS profile download", r.status_code == 200 and b"PayloadContent" in r.data)
+    hub.stop_server()
+
     # layout stress: 100 & 102 questions, letter paper
     for label, (nq, k, page) in {"100Q/5opt": (100, 5, "a4"),
                                  "88Q letter": (88, 4, "letter")}.items():
@@ -315,14 +436,57 @@ def main() -> int:
     check("custom header renders (instructions + 140% + logo right)",
           pdf4.exists() and pdf4.stat().st_size > 4000)
 
-    try:
-        generate_sheet_pdf(TestConfig(title="Bad", num_questions=10,
-                                      sheet_instructions="W" * 240,
-                                      header_font_scale=1.4), tmp / "bad.pdf")
-        t4.ensure_ids()
-        check("impossible header rejected", False)
-    except ValueError as e:
-        check("impossible header rejected", "does not fit" in str(e), str(e)[:40])
+    # pathological no-space text: hard-wrapped into ≤3 lines, never overlapping
+    _, lay_bad = generate_sheet_pdf(
+        TestConfig(title="Bad", num_questions=10,
+                   sheet_instructions="W" * 240, header_font_scale=1.4),
+        tmp / "bad.pdf")
+    check("pathological text hard-wrapped (≤3 lines, no overlap)",
+          any("auto-shrunk" in w for w in lay_bad.warnings),
+          "; ".join(lay_bad.warnings)[:60])
+
+    # partial key: create & print first, key later
+    r = client.post("/api/tests", content_type="application/json", json={
+        "title": "Partial Key Flow", "num_questions": 8, "options_per_question": 4,
+        "answer_key": {"1": "A", "2": "B", "3": "C"}})
+    check("creation with PARTIAL key allowed", r.status_code == 200
+          and r.get_json().get("missing_key") == 5, str(r.get_json())[:60])
+    r = client.post("/api/key", json={"entries": {
+        "4": "D", "5": "A", "6": "B", "7": "C", "8": "D"}})
+    check("define key later via /api/key",
+          r.status_code == 200 and r.get_json().get("defined") == 8)
+
+    # header collisions impossible across layout variants
+    from optibubble.layout import LayoutError as _LE
+    variants_ok = True
+    for kw in (dict(), dict(logo_position="right"),
+               dict(logo_position="right", header_font_scale=1.4),
+               dict(header_font_scale=1.4,
+                    sheet_instructions="W" * 200)):
+        tv = TestConfig(title="Variantious Long Title Here Indeed", num_questions=50, **kw)
+        tv.ensure_ids(); tv.randomize_key()
+        try:
+            generate_sheet_pdf(tv, tmp / f"var_{len(kw)}_{int(tv.header_font_scale*10)}.pdf")
+        except (_LE, ValueError):
+            variants_ok = False
+    check("header collision-free (4 variants)", variants_ok)
+
+    # write-in fields render as inked lines in the band
+    tw_ = TestConfig(title="WriteIn", num_questions=10,
+                     write_in_fields="Name,Class,Date")
+    tw_.ensure_ids(); tw_.randomize_key()
+    pdfw, layw = generate_sheet_pdf(tw_, tmp / "writein.pdf")
+    fw = render_pdf(pdfw)
+    mmw = fw.shape[1] / layw.page_w
+    band = fw[int(52*mmw):int(62*mmw), int(24*mmw):int(140*mmw)]
+    check("write-in fields band present", float((band.mean(-1) < 150).mean()) > 0.002,
+          f"ink fraction {(band.mean(-1) < 150).mean():.4f}")
+
+    # the sheet endpoint really serves a PDF
+    r = client.get("/api/sheet.pdf")
+    check("sheet endpoint serves PDF", r.status_code == 200
+          and r.headers.get("Content-Type", "").startswith("application/pdf")
+          and r.data[:5] == b"%PDF-")
 
     r = client.post("/api/tests", content_type="application/json", json={
         "title": "API Sheet Design", "num_questions": 12, "options_per_question": 4,

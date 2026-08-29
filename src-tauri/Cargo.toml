@@ -3,7 +3,7 @@ name = "optibubble"
 version = "1.0.0"
 description = "OPTIBubble — local OMR & mobile-bridge grading system"
 authors = ["OPTIBubble contributors"]
-license = "MIT"
+license = "GPL-3.0"
 edition = "2021"
 rust-version = "1.77.2"
 

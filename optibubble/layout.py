@@ -48,10 +48,20 @@ ID_DIGITS_X0 = 50.0         # first value-column centre of the student-ID strip
 ID_VALUE_PITCH = 5.6        # horizontal pitch of values 0..9
 ID_ROW_PITCH = 4.3          # vertical pitch of digit rows
 ID_BUBBLE_R = 1.55
-PAGE_DOTS_Y = 58.5          # page-code dots row
-PAGE_DOTS_X0 = 50.0
+PAGE_DOTS_Y = 58.5          # page-code dots row (right side, under the QR)
+PAGE_DOTS_X0 = 152.0
 PAGE_DOTS_PITCH = 5.0
 PAGE_DOTS_R = 1.35
+
+# handwritten write-in fields band (Name / Class / Date …) — decorative only,
+# completely ignored by the OMR engine
+WRITE_IN_TOP = 52.5
+WRITE_IN_ROW_H = 5.6
+WRITE_IN_X0 = 24.0
+WRITE_IN_X1 = 146.0
+HEADER_RULE_Y = 49.0
+HEADER_LEFT = 20.0            # shared left margin for header furniture
+HEADER_RIGHT_INSET = 20.0     # shared right margin
 QUESTIONS_TOP = 104.0
 QUESTIONS_BOTTOM_MARGIN = 21.0
 QUESTION_PITCH_MAX = 5.2
@@ -248,6 +258,29 @@ class SheetLayout:
 # ----------------------------------------------------------------------------
 class LayoutError(ValueError):
     """Raised when a sheet cannot be laid out without overlaps."""
+
+
+def boxes_overlap(a, b, pad: float = 0.0) -> bool:
+    """Axis-aligned boxes (x0, y0, x1, y1), top-left origin."""
+    return not (a[2] + pad <= b[0] or b[2] + pad <= a[0] or
+                a[3] + pad <= b[1] or b[3] + pad <= a[1])
+
+
+def validate_header_boxes(boxes: List[Tuple[str, float, float, float, float]]
+                          ) -> None:
+    """Assert that no header element rectangle intersects another.
+
+    boxes: (name, x0, y0, x1, y1) in mm, top-left origin.
+    Raises LayoutError naming the colliding pair.
+    """
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            a, b = boxes[i], boxes[j]
+            if boxes_overlap(a[1:], b[1:], pad=0.3):
+                raise LayoutError(
+                    f"Header elements overlap: “{a[0]}” and “{b[0]}” "
+                    f"at ({a[1]:.0f},{a[2]:.0f})×({b[1]:.0f},{b[2]:.0f}) mm — "
+                    "reduce the text size or shorten the text.")
 
 
 def validate_layout(lay: SheetLayout) -> List[str]:

@@ -140,6 +140,7 @@ function setupReadForm() {
     options_per_question: S.opts, student_id_digits: S.digits,
     page_size: S.paper, answer_key: S.key,
     sheet_instructions: $("fInstructions").value,
+    write_in_fields: $("fWriteIn").value || "",
     header_font_scale: parseFloat($("fHeaderScale").value) || 1.0,
     logo_position: S.logo || "left",
   };
@@ -217,12 +218,16 @@ function initSetup() {
     const body = setupReadForm();
     const err = $("setupErr"); err.style.display = "none";
     try {
-      await api("/api/tests", {method: "POST",
+      const r = await api("/api/tests", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       toast("Test created — sheet ready to print", "ok");
+      if (r.missing_key > 0) {
+        toast(`Key incomplete — ${r.missing_key} question(s) undefined. ` +
+              "You can print now and finish the key on Scan & Serve.");
+      }
       (r.warnings || []).forEach(w => toast("ℹ " + w));
       $("previewBox").style.display = "";
-      $("previewImg").src = "/api/preview.png?" + Date.now();
+      $("previewPdf").src = "/api/sheet.pdf?" + Date.now();
       refresh(true); goto("serve");
     } catch (e) {
       const errs = (e.data && e.data.errors) || ["Could not create the test."];
@@ -235,6 +240,7 @@ function initSetup() {
 function renderServe() {
   const st = S.state; if (!st) return;
   updateServerPill(st);
+  renderKeyCard(st);
   const sel = $("ipSel");
   const ips = st.server.ips || [];
   if (sel.dataset.ips !== ips.join()) {
@@ -244,23 +250,57 @@ function renderServe() {
   const ip = sel.value || ips[0];
   if (st.test) {
     $("srvUrl").value = `http://${ip}:${st.server.port}/scan/${st.test.session_token}`;
-    $("qrImg").src = st.server.running
-      ? "/api/qr.png?ip=" + encodeURIComponent(ip) + "&t=" + Date.now() : "";
-    $("qrImg").style.display = st.server.running ? "" : "none";
   } else {
     $("srvUrl").value = "— create a test first —";
-    $("qrImg").style.display = "none";
+  }
+  const running = st.server.running;
+  const trusted = st.server.https_domain && st.server.https_running;
+  $("qrImg").style.display = running ? "" : "none";
+  $("qrCert").style.display = (running && !trusted) ? "" : "none";
+  $("qrCert").parentElement.style.opacity = trusted ? "" : "";
+  if (running) {
+    const bust = "&t=" + Date.now();
+    // QR A — one-time certificate install (HTTP, reachable before trust exists)
+    $("qrCert").src = "/api/qr.png?url=" +
+      encodeURIComponent(`http://${ip}:${st.server.port}/cert`) + bust;
+    // QR B — the scanner; HTTPS (live camera) when the TLS bridge is up
+    if (st.test) {
+      const host = st.server.https_domain || ip;
+      const scan = st.server.https_running
+        ? `https://${host}:${st.server.https_port}/scan/${st.test.session_token}`
+        : `http://${ip}:${st.server.port}/scan/${st.test.session_token}`;
+      $("srvUrl").value = scan;
+      $("qrImg").src = "/api/qr.png?url=" + encodeURIComponent(scan) + bust;
+      $("qrBLabel").textContent = st.server.https_running
+        ? "Open the scanner 🔒" : "Open the scanner";
+      $("qrBHint").textContent = st.server.https_running
+        ? "live camera enabled (HTTPS)" : "HTTPS off — native-camera fallback";
+    }
   }
 }
 function updateServerPill(st) {
   const p = $("srvPill"), b = $("srvBtn");
   if (st.server.running) {
-    p.className = "pill ok"; p.textContent = "● server online :" + st.server.port;
+    p.className = "pill ok";
+    p.textContent = st.server.https_running
+      ? "● https :" + st.server.https_port + " + http :" + st.server.port
+      : "● server online :" + st.server.port;
     b.textContent = "■  Stop server"; b.className = "btn danger";
   } else {
     p.className = "pill off"; p.textContent = "● server offline";
     b.textContent = "▶  Start server"; b.className = "btn";
   }
+}
+function renderKeyCard(st) {
+  const card = $("keyCard");
+  if (!st.test) { card.style.display = "none"; return; }
+  card.style.display = "";
+  const defined = Object.keys(st.test.answer_key || {}).length;
+  const total = st.test.num_questions;
+  $("keySub").innerHTML = defined >= total
+    ? '<span class="badge ok">✔ complete</span> All questions have a key.'
+    : `<span class="badge warn">${defined}/${total} defined</span> Grading ` +
+      "scores only defined questions until the key is complete.";
 }
 function initServe() {
   $("srvBtn").onclick = async () => {
@@ -279,6 +319,20 @@ function initServe() {
     if (v.startsWith("http")) { navigator.clipboard.writeText(v); toast("Link copied", "ok"); }
   };
   $("ipSel").onchange = () => renderServe();
+  $("keySave").onclick = async () => {
+    const txt = $("keyEdit").value;
+    const entries = {};
+    const kv = txt.toUpperCase().match(/(\d{1,3})\s*[:.\-]\s*([A-E])/g) || [];
+    kv.forEach(m => { const g = m.match(/(\d{1,3})\s*[:.\-]\s*([A-E])/);
+                      entries[+g[1]] = g[2]; });
+    if (!kv.length) [...txt.toUpperCase().replace(/[^A-E]/g, "")].forEach(
+      (a, i) => { entries[i + 1] = a; });
+    const r = await api("/api/key", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({entries})});
+    toast(`Key updated — ${r.defined}/${r.total} defined`, "ok");
+    refresh(true); renderKeyCard(S.state);
+  };
   $("revealBtn").onclick = async e => { e.preventDefault(); await api("/api/reveal"); };
 }
 
@@ -447,11 +501,11 @@ function renderHisto(scores, max) {
 const SETTING_DEFS = {
   engine: [
     ["t_fill", "Bubble fill threshold", 0.05, 0.8, 0.01, null,
-     "Dark-pixel ratio above which a bubble counts as filled."],
+     "Relative fill (0 = empty sibling, 1 = printed ink) above which a bubble counts as filled."],
     ["t_blank", "Blank threshold", 0.02, 0.4, 0.01, null,
      "Below this the bubble is treated as untouched."],
     ["faint_upper", "Faint-mark ceiling", 0.2, 0.95, 0.01, null,
-     "A fill between the fill threshold and this value is flagged as faint."],
+     "Relative fills between the fill threshold and this are flagged as faint."],
     ["multi_ratio", "Double-mark ratio", 0.3, 0.95, 0.01, null,
      "If the 2nd-darkest bubble exceeds top × this ratio → flagged."],
     ["dark_threshold_offset", "Binarisation offset", -60, 60, 1, null,
@@ -499,6 +553,41 @@ async function loadSettings() {
     }).join("");
   });
   $("setDataDir").textContent = "Data folder: " + (S.state ? S.state.data_dir : "");
+  // HTTPS mode card
+  const mode = s.https_mode || "local";
+  document.querySelectorAll("#httpsMode button").forEach(b => {
+    b.classList.toggle("active", b.dataset.v === mode);
+    b.onclick = () => saveOne("https_mode", b.dataset.v).then(() => loadSettings());
+  });
+  $("trustedFields").style.display = mode === "letsencrypt" ? "" : "none";
+  $("acmeDomain").value = s.acme_domain || "";
+  $("duckToken").value = s.duckdns_token || "";
+  $("acmeEmail").value = s.acme_email || "";
+  const saveTrusted = () => api("/api/settings", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({acme_domain: $("acmeDomain").value,
+                          duckdns_token: $("duckToken").value,
+                          acme_email: $("acmeEmail").value})});
+  $("acmeDomain").onchange = saveTrusted;
+  $("duckToken").onchange = saveTrusted;
+  $("acmeEmail").onchange = saveTrusted;
+  $("provisionBtn").onclick = async () => {
+    await saveTrusted();
+    $("provisionBtn").disabled = true;
+    $("provHint").textContent = "Issuing — this takes up to 3 minutes (DNS)…";
+    try {
+      const r = await api("/api/https/provision", {method: "POST"});
+      toast(r.ok ? "Provisioning started — watch the log on Scan & Serve"
+                 : r.error, r.ok ? "ok" : "err");
+      $("provHint").textContent = r.ok
+        ? "Issuing in the background — restart the server when done."
+        : r.error;
+    } catch (e) {
+      toast((e.data && e.data.error) || "provisioning failed", "err");
+      $("provHint").textContent = "failed — check domain + token";
+    }
+    $("provisionBtn").disabled = false;
+  };
   document.querySelectorAll("#page-settings .switch").forEach(sw => sw.onclick = () => {
     sw.classList.toggle("on");
     saveOne(sw.dataset.key, sw.classList.contains("on"));

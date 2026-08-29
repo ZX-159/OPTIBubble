@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": ["engine/*"],
     "category": "Education",
     "shortDescription": "Local OMR grading with a mobile-bridge scanner",
     "longDescription": "Print dynamic MCQ answer sheets, scan them with any smartphone camera over local Wi-Fi, grade with OpenCV on your own computer, review ambiguous marks and export results to CSV. 100% local — no cloud.",

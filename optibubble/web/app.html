@@ -136,12 +136,17 @@
                 <button data-v="right">Right ◨</button>
               </div>
               <span class="hint">Logo prints in brand blue #2e5a99.</span></div>
+            <div class="field"><label>Handwritten write-in fields</label>
+              <input type="text" id="fWriteIn" value="Name, Class, Date" maxlength="100">
+              <span class="hint">Comma-separated lines students fill by hand —
+                the scanner ignores them. Leave empty for none (max 6).</span></div>
           </div>
           <div class="card">
-            <h3>👁 Preview</h3>
-            <p class="sub">Appears after you create the test.</p>
+            <h3>👁 Sheet preview (PDF)</h3>
+            <p class="sub">The actual printable PDF — appears after you create
+               the test. Print at 100% (“Actual size”).</p>
             <div class="previewbox" id="previewBox" style="display:none">
-              <img id="previewImg" alt="Sheet preview">
+              <embed id="previewPdf" type="application/pdf" src="" style="width:100%; height:520px">
             </div>
           </div>
         </div>
@@ -152,19 +157,42 @@
     <section class="page" id="page-serve">
       <div class="serve">
         <div class="card">
-          <h3>📱 Magic link</h3>
-          <p class="sub">Students scan this with the phone's normal camera — the scanner
-             opens in the browser. No app, no internet.</p>
-          <div class="qrwrap">
-            <div class="qrframe mark"><img id="qrImg" alt="Scan to start"></div>
-            <div class="urlrow">
-              <input type="text" id="srvUrl" class="mono" readonly value="—">
-              <button class="btn sm ghost" id="copyBtn">Copy</button>
+          <h3>📱 Student scan — two codes</h3>
+          <p class="sub">Code A unlocks the live camera (one-time certificate install).
+             Code B opens the scanner. Without A, students still scan via the
+             native-camera fallback.</p>
+          <div class="qrgrid">
+            <div class="qrblock">
+              <div class="steptag">A · one-time</div>
+              <div class="qrframe mark"><img id="qrCert" alt="Install certificate"></div>
+              <b>Enable live camera 🔒</b>
+              <span class="muted">install the local certificate</span>
             </div>
-            <select id="ipSel" style="max-width:280px"></select>
-            <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
-            <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" style="text-decoration:none">🖨 Open sheet PDF (print at 100%)</a>
+            <div class="qrblock">
+              <div class="steptag ok">B · every scan</div>
+              <div class="qrframe mark"><img id="qrImg" alt="Scan to start"></div>
+              <b id="qrBLabel">Open the scanner</b>
+              <span class="muted" id="qrBHint">—</span>
+            </div>
           </div>
+          <div class="urlrow" style="margin-top:12px">
+            <input type="text" id="srvUrl" class="mono" readonly value="—">
+            <button class="btn sm ghost" id="copyBtn">Copy</button>
+          </div>
+          <select id="ipSel" style="max-width:280px"></select>
+          <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
+          <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" style="text-decoration:none">🖨 Open sheet PDF (print at 100%)</a>
+        </div>
+        <div class="card" id="keyCard" style="display:none">
+          <h3>🔑 Answer key</h3>
+          <p class="sub" id="keySub">—</p>
+          <div style="display:flex; gap:8px">
+            <input type="text" id="keyEdit" class="mono" placeholder="e.g. 1:A 2:C 3:B …  or  ABCDABCD…"
+                   style="flex:1">
+            <button class="btn sm" id="keySave">Save</button>
+          </div>
+          <span class="hint">You can print and scan now — grading scores the
+            questions that already have a key.</span>
         </div>
         <div class="card">
           <h3>📡 Live activity</h3>
@@ -223,6 +251,30 @@
             <p class="sub">Phone-side capture quality.</p><div id="setCamera"></div></div>
           <div class="card" style="margin-bottom:16px"><h3>🌐 Local server</h3>
             <p class="sub">Restart the server after changing these.</p><div id="setServer"></div></div>
+          <div class="card" style="margin-bottom:16px"><h3>🔒 HTTPS for the live camera</h3>
+            <p class="sub">Browsers only allow in-page cameras on HTTPS. Two ways:</p>
+            <div class="field"><label>Mode</label>
+              <div class="seg" id="httpsMode">
+                <button data-v="local" class="active">Local CA (offline)</button>
+                <button data-v="letsencrypt">Trusted · zero student setup</button>
+              </div></div>
+            <div id="trustedFields" style="display:none">
+              <div class="field"><label>Your free DuckDNS domain</label>
+                <input type="text" id="acmeDomain" placeholder="myclass.duckdns.org">
+                <span class="hint">Create one at duckdns.org (1 min, free) and point
+                  it at this PC's LAN IP. Students then get the live camera with
+                  <b>zero setup — no certificate install</b>.</span></div>
+              <div class="field"><label>DuckDNS token</label>
+                <input type="text" id="duckToken" placeholder="paste your token"></div>
+              <div class="field"><label>Email (expiry notices)</label>
+                <input type="text" id="acmeEmail" placeholder="you@school.edu"></div>
+              <button class="btn sm" id="provisionBtn">Issue certificate</button>
+              <span class="hint" id="provHint">Needs internet once; renews
+                automatically 30 days before expiry.</span>
+            </div>
+            <p class="sub" style="margin-top:10px">Local CA mode works fully offline —
+              students scan code A once to trust this PC (Android: use Firefox).</p>
+          </div>
           <div class="card"><h3>🧰 Maintenance</h3>
             <p class="sub" id="setDataDir">data folder</p>
             <button class="btn sm ghost" id="resetSettings">Reset to defaults</button></div>
