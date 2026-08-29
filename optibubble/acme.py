@@ -75,16 +75,39 @@ def duckdns_txt_url(domain: str, token: str, txt: str) -> str:
 
 
 def dns_txt_lookup(domain: str) -> list:
-    """Resolve TXT records for _acme-challenge.<domain> over DoH (no deps)."""
-    url = ("https://cloudflare-dns.com/dns-query?name=_acme-challenge."
-           f"{domain}&type=TXT")
-    try:
-        r = _http(url, headers={"accept": "application/dns-json"})
-        data = json.loads(r.read())
-        return [a.get("data", "") for a in data.get("Answer", [])
-                if a.get("type") == 16]
-    except Exception:
-        return []
+    """Resolve TXT records for _acme-challenge.<domain> over DoH (no deps).
+
+    Tries Cloudflare then Google; TXT payloads arrive DNS-quoted
+    (\"value\") so the quotes are stripped before comparison.
+    """
+    for base in ("https://cloudflare-dns.com/dns-query",
+                 "https://dns.google/resolve"):
+        try:
+            r = _http(f"{base}?name=_acme-challenge.{domain}&type=TXT",
+                      headers={"accept": "application/dns-json"})
+            data = json.loads(r.read())
+            vals = [a.get("data", "").strip('"').strip()
+                    for a in data.get("Answer", []) if a.get("type") == 16]
+            if vals:
+                return vals
+        except Exception:
+            continue
+    return []
+
+
+def dns_a_lookup(domain: str) -> list:
+    """Resolve the A record of <domain> over DoH (preflight check)."""
+    for base in ("https://cloudflare-dns.com/dns-query",
+                 "https://dns.google/resolve"):
+        try:
+            r = _http(f"{base}?name={domain}&type=A",
+                      headers={"accept": "application/dns-json"})
+            data = json.loads(r.read())
+            return [a.get("data", "") for a in data.get("Answer", [])
+                    if a.get("type") == 1]
+        except Exception:
+            continue
+    return []
 
 
 class ACMEClient:
@@ -176,11 +199,16 @@ class ACMEClient:
                     return loc, ch["url"], txt
         raise ACMEError("no dns-01 challenge in the ACME order")
 
-    def wait_propagation(self, domain: str, txt: str, timeout: int = 180) -> bool:
+    def wait_propagation(self, domain: str, txt: str, timeout: int = 240,
+                         progress_every: int = 15) -> bool:
         t0 = time.time()
+        next_note = progress_every
         while time.time() - t0 < timeout:
             if txt in dns_txt_lookup(domain):
                 return True
+            if self.log and time.time() - t0 >= next_note:
+                self.log(f"waiting for DNS propagation … {int(next_note)}s")
+                next_note += progress_every
             time.sleep(5)
         return False
 
@@ -248,6 +276,7 @@ def make_csr(domain: str, key) -> x509.CertificateSigningRequest:
 
 def issue_trusted_cert(domain: str, duckdns_token: str, email: str,
                        out_dir: Path, staging: bool = False,
+                       progress_every: int = 15,
                        log=lambda msg: None) -> Tuple[Path, Path]:
     """Full DNS-01 issuance for <domain> via DuckDNS → (cert, key) PEM paths."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -262,7 +291,8 @@ def issue_trusted_cert(domain: str, duckdns_token: str, email: str,
             serialization.PrivateFormat.TraditionalOpenSSL,
             serialization.NoEncryption()))
 
-    client = ACMEClient(DIR_STAGING if staging else DIR_PROD, email, acct_key)
+    client = ACMEClient(DIR_STAGING if staging else DIR_PROD, email, acct_key,
+                        log=log)
     log("· contacting Let's Encrypt …")
     client.new_account()
     log("· ACME account ready")
@@ -272,7 +302,8 @@ def issue_trusted_cert(domain: str, duckdns_token: str, email: str,
     if b"OK" not in (r.read() or b""):
         raise ACMEError("DuckDNS rejected the TXT update — check the token")
     log("· TXT record published, waiting for DNS propagation …")
-    if not client.wait_propagation(domain, txt):
+    if not client.wait_propagation(domain, txt,
+                                   progress_every=progress_every):
         raise ACMEError("TXT record did not propagate in time — try again")
     server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pem = client.answer_and_finalize(order_url, ch_url, domain,

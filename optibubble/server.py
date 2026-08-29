@@ -74,10 +74,22 @@ def create_app(hub: Hub) -> Flask:
         if s.https_mode != "letsencrypt" or not s.acme_domain \
                 or not s.duckdns_token:
             return jsonify({"ok": False,
-                            "error": "Set the HTTPS mode to Trusted and fill "
+                            "error": "Switch the mode to Trusted and fill in "
                                      "the domain + DuckDNS token first."}), 400
-        hub.provision_trusted()
-        return jsonify({"ok": True, "domain": s.acme_domain})
+        state = hub.provision_trusted()
+        return jsonify({"ok": state["state"] in ("running", "ok"),
+                        "state": state})
+
+    @app.route("/api/https/status")
+    def https_status():
+        from .acme import trusted_cert_valid
+        tc, _ = hub.trusted_cert_paths()
+        st = hub._prov_state()
+        st = dict(st)
+        st["serving_trusted"] = bool(hub._https_host)
+        st["cert_days_left"] = (trusted_cert_valid(tc, 0) and
+                                (x509_days_left(tc)))
+        return jsonify(st)
 
     @app.route("/api/reveal", methods=["POST"])
     def reveal():
@@ -365,7 +377,7 @@ small{{color:#8B99B0;display:block;margin-top:4px}}
 ol{{padding-left:20px;color:#A3A6B1}} ol b{{color:#EAEBEF}}
 </style></head><body><main>
 <p style="letter-spacing:.18em;font-size:10px;color:#686C79;font-weight:800">OPTIBubble · Secure Camera</p>
-<h1>Unlock the live viewfinder 🔒</h1>
+<h1>Unlock the live viewfinder</h1>
 <p style="color:#A3A6B1">Your browser only allows in-page cameras on secure
 connections. Install the teacher's local certificate once — it takes under a
 minute — then every future scan opens the live camera automatically.</p>
@@ -396,3 +408,13 @@ or open:<br><code style="color:#FF7448;word-break:break-all">{https}</code>
 certificate after class: Settings → Profiles / credential storage.</small>
 </div>
 </main></body></html>"""
+
+
+def x509_days_left(path) -> int:
+    try:
+        from cryptography import x509 as _x
+        import datetime as _dt
+        c = _x.load_pem_x509_certificate(Path(path).read_bytes())
+        return (c.not_valid_after_utc - _dt.datetime.now(_dt.timezone.utc)).days
+    except Exception:
+        return -1

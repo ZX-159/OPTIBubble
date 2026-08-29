@@ -92,7 +92,22 @@ with sync_playwright() as p:
     snap("05-results.png")
     page.evaluate("goto('settings')")
     time.sleep(0.6)
+    # show the guided wizard mid-run for the screenshot
+    hub._https_provision = {
+        "state": "running", "error": "", "hint": "", "domain": "myclass.duckdns.org",
+        "ts": time.time(),
+        "steps": [
+            {"id": "check", "label": "Checking your setup", "status": "done", "detail": ""},
+            {"id": "account", "label": "Contacting Let's Encrypt", "status": "done", "detail": ""},
+            {"id": "dns", "label": "Publishing the DNS challenge", "status": "done", "detail": ""},
+            {"id": "wait", "label": "Waiting for DNS (up to 3 min)", "status": "active", "detail": "45s elapsed"},
+            {"id": "issue", "label": "Issuing the certificate", "status": "pending", "detail": ""},
+            {"id": "activate", "label": "Activating on this PC", "status": "pending", "detail": ""},
+        ]}
+    time.sleep(0.8)
     snap("06-settings.png")
+    hub._https_provision = {"state": "idle", "steps": [], "error": "", "hint": "",
+                            "domain": "", "ts": 0}
     page.evaluate("goto('help')")
     snap("07-help.png")
 

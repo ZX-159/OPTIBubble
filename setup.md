@@ -44,7 +44,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 46/46 checks passed · ALL GREEN
+python selftest.py                 # expect: 49/49 checks passed · ALL GREEN
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -183,14 +183,22 @@ update it once at duckdns.org (no new certificate needed; the cert is for the
 1. Sign in at [duckdns.org](https://www.duckdns.org) (any GitHub/Google/etc.
    account), create a subdomain, e.g. `myclass`, set its IP to this PC's LAN
    address, and copy your **token** from the top of the page.
-2. OPTIBubble → **Settings → 🔒 HTTPS for the live camera** →
-   mode **Trusted · zero student setup** → fill *domain*, *token*, *email* →
-   **Issue certificate**. Watch the progress lines (contacting Let's Encrypt
-   → TXT published → waiting for propagation → ✔ issued). Takes ≤ 3 min,
-   dominated by DNS propagation.
-3. **Stop / Start** the server. QR B now shows
-   `https://myclass.duckdns.org:5443/…`, the topbar pill reads
-   `● https :5443 + http :5000`, and code A is hidden — students don't need it.
+2. OPTIBubble → **Settings → Live camera (HTTPS)** → mode
+   **Trusted · recommended** → fill *domain*, *token*, *email* → press
+   **Set up the live camera**. A guided checklist shows live progress with
+   elapsed time (checking your setup → contacting Let's Encrypt → publishing
+   the DNS challenge → waiting for DNS → issuing → activating). Takes ≤ 3 min,
+   dominated by DNS propagation. The certificate **activates itself** — no
+   server restart, no extra clicks.
+3. Done. The Scan & Serve page now shows a **single “Scan to grade” QR code**
+   at `https://myclass.duckdns.org:5443/…` with a
+   *Trusted HTTPS · myclass.duckdns.org* status chip; the certificate-install
+   code disappears because students don't need it.
+
+If anything is wrong, the wizard stops at the failing step with a plain-language
+fix — e.g. *“myclass.duckdns.org points at 84.x.x.x, but this PC is
+192.168.0.15 — open duckdns.org, set the IP to 192.168.0.15, press Start
+again”*. Nothing to interpret, nothing to restart.
 
 **Verify it worked:** open the QR-B URL on any phone (or the teacher PC) —
 the padlock is clean with no warnings and the scanner shows the
@@ -307,7 +315,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (43 checks)
+    name: Self-test (49 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

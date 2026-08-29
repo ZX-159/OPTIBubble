@@ -7,8 +7,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 const PAGES = [
-  ["dashboard", "⌂"], ["setup", "✎"], ["serve", "◉"], ["review", "☰"],
-  ["results", "▦"], ["settings", "⚙"], ["help", "?"],
+  ["dashboard", "home"], ["setup", "pencil"], ["serve", "scan"],
+  ["review", "queue"], ["results", "table"], ["settings", "settings"],
+  ["help", "help"],
 ];
 const FAQ = [
   ["How do students scan their sheets?",
@@ -52,7 +53,9 @@ const S = {
 function toast(msg, cls = "") {
   const t = document.createElement("div");
   t.className = "toast " + cls;
-  t.textContent = msg;
+  const ic = cls === "ok" ? "check" : cls === "err" ? "alert" : "info";
+  t.innerHTML = `<span style="display:inline-flex;width:16px">${icon(ic, 13)}</span>` +
+    esc(msg);
   $("toasts").appendChild(t);
   setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s"; }, 2600);
   setTimeout(() => t.remove(), 3000);
@@ -68,7 +71,7 @@ async function api(path, opts = {}) {
 /* ------------------------------------------------------------- navigation */
 function buildTabs() {
   $("tabs").innerHTML = PAGES.map(([id, ic]) =>
-    `<button class="tab" data-page="${id}">${ic}<span>${labelOf(id)}</span>
+    `<button class="tab" data-page="${id}">${icon(ic, 14)}<span>${labelOf(id)}</span>
      ${id === "review" ? '<span class="badge" id="tabReviewBadge">0</span>' : ""}</button>`
   ).join("");
 }
@@ -217,6 +220,8 @@ function initSetup() {
   $("createBtn").onclick = async () => {
     const body = setupReadForm();
     const err = $("setupErr"); err.style.display = "none";
+    const btn = $("createBtn");
+    btn.classList.add("loading"); btn.disabled = true;
     try {
       const r = await api("/api/tests", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
@@ -232,6 +237,8 @@ function initSetup() {
     } catch (e) {
       const errs = (e.data && e.data.errors) || ["Could not create the test."];
       err.textContent = "• " + errs.join("  • "); err.style.display = "";
+    } finally {
+      btn.classList.remove("loading"); btn.disabled = false;
     }
   };
 }
@@ -248,43 +255,72 @@ function renderServe() {
     sel.innerHTML = ips.map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join("");
   }
   const ip = sel.value || ips[0];
+  const running = st.server.running;
+  const trusted = !!(st.server.https_domain && st.server.https_running);
+  const blockA = $("qrBlockA"), blockB = $("qrBlockB");
+  const bust = "&t=" + Date.now();
+
+  blockB.style.display = running ? "" : "none";
+  if (trusted) {
+    // zero-setup mode: ONE code, everything else hidden
+    $("qrSub").innerHTML = "<b>Students scan this once per class.</b> " +
+      "The live camera opens automatically — no app, no install, any phone.";
+    blockA.style.display = "none";
+    $("qrTagB").textContent = "Scan to grade";
+    $("qrBHint").textContent = "live camera · trusted HTTPS";
+  } else if (st.server.https_running && st.test) {
+    // offline mode: certificate once (A), then scan (B)
+    $("qrSub").innerHTML = "Two steps, <b>once per phone</b>: scan " +
+      "<b>1</b> to enable the live camera (one-time install), then scan " +
+      "<b>2</b> for every class. In a hurry? Scan 2 and use the upload " +
+      "button — it always works.";
+    blockA.style.display = "";
+    $("qrCert").src = "/api/qr.png?url=" +
+      encodeURIComponent(`http://${ip}:${st.server.port}/cert`) + bust;
+    $("qrTagB").textContent = "Step 2 · every class";
+    $("qrBHint").textContent = "live camera (after step 1)";
+  } else {
+    $("qrSub").textContent = "Students scan and use the upload button " +
+      "(native camera) — the live viewfinder needs the HTTPS setup in Settings.";
+    blockA.style.display = "none";
+    $("qrBHint").textContent = "native-camera upload mode";
+  }
+
   if (st.test) {
-    $("srvUrl").value = `http://${ip}:${st.server.port}/scan/${st.test.session_token}`;
+    const host = trusted ? st.server.https_domain : ip;
+    const scan = st.server.https_running
+      ? `https://${host}:${st.server.https_port}/scan/${st.test.session_token}`
+      : `http://${ip}:${st.server.port}/scan/${st.test.session_token}`;
+    $("srvUrl").value = scan;
+    if (running) $("qrImg").src = "/api/qr.png?url=" +
+      encodeURIComponent(scan) + bust;
+    $("qrBLabel").innerHTML = icon("qr", 14) + " " +
+      (trusted ? "Scan to grade" : "Open the scanner");
   } else {
     $("srvUrl").value = "— create a test first —";
   }
-  const running = st.server.running;
-  const trusted = st.server.https_domain && st.server.https_running;
-  $("qrImg").style.display = running ? "" : "none";
-  $("qrCert").style.display = (running && !trusted) ? "" : "none";
-  $("qrCert").parentElement.style.opacity = trusted ? "" : "";
-  if (running) {
-    const bust = "&t=" + Date.now();
-    // QR A — one-time certificate install (HTTP, reachable before trust exists)
-    $("qrCert").src = "/api/qr.png?url=" +
-      encodeURIComponent(`http://${ip}:${st.server.port}/cert`) + bust;
-    // QR B — the scanner; HTTPS (live camera) when the TLS bridge is up
-    if (st.test) {
-      const host = st.server.https_domain || ip;
-      const scan = st.server.https_running
-        ? `https://${host}:${st.server.https_port}/scan/${st.test.session_token}`
-        : `http://${ip}:${st.server.port}/scan/${st.test.session_token}`;
-      $("srvUrl").value = scan;
-      $("qrImg").src = "/api/qr.png?url=" + encodeURIComponent(scan) + bust;
-      $("qrBLabel").textContent = st.server.https_running
-        ? "Open the scanner 🔒" : "Open the scanner";
-      $("qrBHint").textContent = st.server.https_running
-        ? "live camera enabled (HTTPS)" : "HTTPS off — native-camera fallback";
-    }
+
+  const ss = $("serveStatus");
+  if (trusted) {
+    ss.innerHTML = `<span class="chip ok"><span class="live"></span>Trusted HTTPS · ${esc(st.server.https_domain)}</span>` +
+      `<span class="chip muted">expires in ${S.certDays ?? "?"} days · renews itself</span>`;
+  } else if (st.server.https_running) {
+    ss.innerHTML = `<span class="chip warn">${icon("lock", 12)}Offline mode — code 1 needed once</span>` +
+      ` <span class="chip muted">better: Settings → Live camera → Trusted</span>`;
+  } else {
+    ss.innerHTML = `<span class="chip muted">${icon("camera", 12)}upload-only mode</span>`;
   }
 }
+
 function updateServerPill(st) {
   const p = $("srvPill"), b = $("srvBtn");
   if (st.server.running) {
     p.className = "pill ok";
-    p.textContent = st.server.https_running
-      ? "● https :" + st.server.https_port + " + http :" + st.server.port
-      : "● server online :" + st.server.port;
+    p.textContent = st.server.https_domain
+      ? "https " + st.server.https_domain + " :" + st.server.https_port
+      : st.server.https_running
+        ? "https :" + st.server.https_port + " + http :" + st.server.port
+        : "server online :" + st.server.port;
     b.textContent = "■  Stop server"; b.className = "btn danger";
   } else {
     p.className = "pill off"; p.textContent = "● server offline";
@@ -305,6 +341,8 @@ function renderKeyCard(st) {
 function initServe() {
   $("srvBtn").onclick = async () => {
     const st = S.state;
+    $("srvBtn").classList.add("loading");
+    setTimeout(() => $("srvBtn").classList.remove("loading"), 1500);
     if (st && st.server.running) {
       await api("/api/serve/stop", {method: "POST"}); toast("Server stopped");
     } else {
@@ -553,41 +591,9 @@ async function loadSettings() {
     }).join("");
   });
   $("setDataDir").textContent = "Data folder: " + (S.state ? S.state.data_dir : "");
-  // HTTPS mode card
-  const mode = s.https_mode || "local";
-  document.querySelectorAll("#httpsMode button").forEach(b => {
-    b.classList.toggle("active", b.dataset.v === mode);
-    b.onclick = () => saveOne("https_mode", b.dataset.v).then(() => loadSettings());
-  });
-  $("trustedFields").style.display = mode === "letsencrypt" ? "" : "none";
-  $("acmeDomain").value = s.acme_domain || "";
-  $("duckToken").value = s.duckdns_token || "";
-  $("acmeEmail").value = s.acme_email || "";
-  const saveTrusted = () => api("/api/settings", {method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({acme_domain: $("acmeDomain").value,
-                          duckdns_token: $("duckToken").value,
-                          acme_email: $("acmeEmail").value})});
-  $("acmeDomain").onchange = saveTrusted;
-  $("duckToken").onchange = saveTrusted;
-  $("acmeEmail").onchange = saveTrusted;
-  $("provisionBtn").onclick = async () => {
-    await saveTrusted();
-    $("provisionBtn").disabled = true;
-    $("provHint").textContent = "Issuing — this takes up to 3 minutes (DNS)…";
-    try {
-      const r = await api("/api/https/provision", {method: "POST"});
-      toast(r.ok ? "Provisioning started — watch the log on Scan & Serve"
-                 : r.error, r.ok ? "ok" : "err");
-      $("provHint").textContent = r.ok
-        ? "Issuing in the background — restart the server when done."
-        : r.error;
-    } catch (e) {
-      toast((e.data && e.data.error) || "provisioning failed", "err");
-      $("provHint").textContent = "failed — check domain + token";
-    }
-    $("provisionBtn").disabled = false;
-  };
+  // ---- HTTPS wizard ----------------------------------------------------
+  renderHttpsCard();
+
   document.querySelectorAll("#page-settings .switch").forEach(sw => sw.onclick = () => {
     sw.classList.toggle("on");
     saveOne(sw.dataset.key, sw.classList.contains("on"));
@@ -605,6 +611,91 @@ async function saveOne(key, value) {
     headers: {"Content-Type": "application/json"}, body: JSON.stringify({[key]: value})});
 }
 
+/* ------------------------------------------------------- HTTPS wizard */
+let httpsPoll = null;
+
+async function renderHttpsCard() {
+  const st = await api("/api/https/status").catch(() => null);
+  if (!st) return;
+  const s = await api("/api/settings").catch(() => ({}));
+  const mode = s.https_mode || "local";
+  document.querySelectorAll("#httpsMode button").forEach(b => {
+    b.classList.toggle("active", b.dataset.v === mode);
+    b.onclick = () => {
+      saveOne("https_mode", b.dataset.v).then(() => { loadSettings(); renderServe(); });
+    };
+  });
+  $("trustedPanel").style.display = "";
+  $("trustedFields").style.display = st.state === "ok" || st.serving_trusted
+    ? "none" : "";
+  $("acmeDomain").value = s.acme_domain || "";
+  $("duckToken").value = s.duckdns_token || "";
+  $("acmeEmail").value = s.acme_email || "";
+  $("localModeNote").style.display = mode === "local" ? "" : "none";
+
+  // banner
+  const ban = $("httpsBanner");
+  const ips = (S.state && S.state.server.ips || []).filter(i => !i.startsWith("127"));
+  const ipNote = ips.length ? `this PC is ${ips[0]}` : "";
+  if (st.serving_trusted) {
+    ban.className = "https-banner ok";
+    ban.innerHTML = icon("shield", 15) +
+      `<span>Live camera active — <b>${esc(s.acme_domain)}</b> · valid ` +
+      `${st.cert_days_left} more days, renews itself.</span>`;
+  } else if (st.state === "running") {
+    ban.className = "https-banner run";
+    ban.innerHTML = icon("zap", 15) + "<span>Setting up… follow the steps below.</span>";
+  } else if (st.state === "error") {
+    ban.className = "https-banner err";
+    ban.innerHTML = icon("alert", 15) + "<span>Setup failed — fix the hint below, then press Start again.</span>";
+  } else {
+    ban.className = "https-banner" + (mode === "local" ? "" : " warn");
+    ban.innerHTML = mode === "local"
+      ? icon("info", 15) + "<span>Offline mode — students install a certificate once (code A).</span>"
+      : icon("camera", 15) + `<span>Not set up yet ${ipNote ? "· " + ipNote : ""} — takes 2–3 minutes, once.</span>`;
+  }
+
+  // steps
+  const steps = st.steps && st.steps.length ? st.steps : [];
+  $("provSteps").innerHTML = steps.map(x => {
+    const stIc = x.status === "done" ? icon("check", 11)
+      : x.status === "error" ? icon("x", 11) : "";
+    return `<li class="${x.status === "active" ? "active" : x.status}" id="pst-${x.id}">
+      <span class="st">${stIc}</span>
+      <span><b>${esc(x.label)}</b>${x.detail ? `<br><span class="muted" style="font-size:11px">${esc(x.detail)}</span>` : ""}</span></li>`;
+  }).join("");
+
+  // error hint
+  const hint = $("provHint");
+  if (st.state === "error" && st.hint) {
+    hint.innerHTML = icon("alert", 13) + " " + esc(st.hint);
+    hint.classList.add("show");
+  } else hint.classList.remove("show");
+
+  // button
+  const btn = $("provisionBtn");
+  btn.classList.toggle("loading", st.state === "running");
+  btn.disabled = st.state === "running";
+  if (st.state !== "running") {
+    btn.innerHTML = icon("zap", 14) + (st.state === "error" ? "Try again"
+      : st.serving_trusted ? "Renew now" : "Set up the live camera");
+  }
+  btn.onclick = async () => {
+    await api("/api/settings", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({acme_domain: $("acmeDomain").value.trim(),
+                            duckdns_token: $("duckToken").value.trim(),
+                            acme_email: $("acmeEmail").value.trim()})});
+    try { await api("/api/https/provision", {method: "POST"}); }
+    catch (e) { toast((e.data && e.data.error) || "could not start", "err"); }
+    renderHttpsCard();
+  };
+
+  clearTimeout(httpsPoll);
+  if (st.state === "running") httpsPoll = setTimeout(renderHttpsCard, 1000);
+  else if (httpsPoll) { clearTimeout(httpsPoll); httpsPoll = null; }
+}
+
 /* ------------------------------------------------------------------- faq */
 function renderFaq() {
   $("faqList").innerHTML = FAQ.map(([q, a], i) =>
@@ -619,22 +710,26 @@ function renderLog(st) {
   if (!log.length) return;
   box.innerHTML = log.map(ev => {
     const t = new Date((ev.ts || 0) * 1000).toTimeString().slice(0, 8);
-    let cls = "in", txt = "";
+    let cls = "in", ic = "info", txt = "";
     switch (ev.type) {
-      case "log": txt = ev.message; break;
-      case "sheet_graded": cls = "ok";
-        txt = `✔ ${ev.result.student_id || "(no ID)"} graded — ${ev.result.score}/${ev.result.max_score} · ${ev.result.duration_ms} ms`; break;
-      case "sheet_flagged": cls = "fl";
-        txt = `⚑ ${ev.result.student_id || "(no ID)"} flagged (${ev.result.flags.length} item${ev.result.flags.length > 1 ? "s" : ""}) → review queue`; break;
-      case "sheet_rejected": cls = "er";
-        txt = `✕ rejected [${ev.code}] ${ev.message}`; break;
-      case "review_resolved": cls = "ok";
-        txt = `✔ review resolved — ${ev.student_id || "?"} ${ev.score} pts → CSV`; break;
-      case "server_started": cls = "ok"; txt = "● server started — " + (ev.url || ""); break;
-      case "server_stopped": txt = "○ server stopped"; break;
+      case "log": txt = ev.message;
+        ic = (ev.level === "warn" || String(ev.message).startsWith("⚠")) ? "alert" : "info"; break;
+      case "sheet_graded": cls = "ok"; ic = "check";
+        txt = `${ev.result.student_id || "(no ID)"} graded — ${ev.result.score}/${ev.result.max_score} · ${ev.result.duration_ms} ms`; break;
+      case "sheet_flagged": cls = "fl"; ic = "queue";
+        txt = `${ev.result.student_id || "(no ID)"} flagged (${ev.result.flags.length} item${ev.result.flags.length > 1 ? "s" : ""}) → review queue`; break;
+      case "sheet_rejected": cls = "er"; ic = "x";
+        txt = `rejected [${ev.code}] ${ev.message}`; break;
+      case "review_resolved": cls = "ok"; ic = "check";
+        txt = `review resolved — ${ev.student_id || "?"} ${ev.score} pts → CSV`; break;
+      case "server_started": cls = "ok"; ic = "server";
+        txt = "server started — " + (ev.url || ""); break;
+      case "server_stopped": ic = "server"; txt = "server stopped"; break;
       default: return "";
     }
-    return `<div><span class="t">${t}</span><span class="${cls}">${esc(txt)}</span></div>`;
+    return `<div><span class="t">${t}</span>` +
+      `<span style="display:inline-flex;width:15px;margin-right:7px" class="${cls}">${icon(ic, 12)}</span>` +
+      `<span class="${cls}">${esc(txt)}</span></div>`;
   }).join("");
   box.scrollTop = box.scrollHeight;
 }
@@ -671,6 +766,7 @@ async function refresh(force = false) {
 /* ----------------------------------------------------------------- init */
 function init() {
   buildTabs();
+  hydrateIcons();
   document.querySelectorAll(".nav a.item").forEach(a => a.onclick = () => goto(a.dataset.page));
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => goto(t.dataset.page));
   document.querySelectorAll("[data-goto]").forEach(el =>

@@ -360,3 +360,84 @@ details.faq p{color:var(--tx2);font-size:12px;margin:8px 0 2px}
   .hero,.setup,.serve,.review{grid-template-columns:1fr}
   .tabs .tab span{display:none}
 }
+
+/* ============ icons · motion · states (UX pass) ========================= */
+.icsvg{display:inline-block;vertical-align:-.18em;flex:none}
+i[data-icon]{display:inline-flex;font-style:normal}
+
+/* motion tokens */
+:root{--ease-spring:cubic-bezier(.2,.9,.3,1.15);--ease-out:cubic-bezier(.2,.7,.3,1);
+  --dur-fast:.12s;--dur-page:.18s}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+.page.active{animation:pageIn var(--dur-page) var(--ease-out)}
+@keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes popIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes slideL{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@keyframes softPulse{0%,100%{opacity:1}50%{opacity:.45}}
+
+.btn{transition:transform var(--dur-fast) var(--ease-out),filter var(--dur-fast),background var(--dur-fast)}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0) scale(.985)}
+.btn.loading{pointer-events:none;opacity:.75}
+.btn.loading::before{content:'';width:12px;height:12px;border-radius:999px;
+  border:2px solid currentColor;border-top-color:transparent;
+  animation:sp .7s linear infinite;margin-right:2px}
+.iconbtn{transition:background var(--dur-fast),color var(--dur-fast)}
+input,select,textarea{transition:outline-color var(--dur-fast)}
+.card{animation:popIn .16s var(--ease-out)}
+.toast{animation:slideL .22s var(--ease-spring)}
+
+/* skeleton loaders */
+.skel{border-radius:4px;background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 45%,var(--bg2) 65%);
+  background-size:200% 100%;animation:shimmer 1.3s linear infinite}
+
+/* empty states */
+.emptystate{padding:26px 10px;text-align:center;color:var(--tx3)}
+.emptystate b{display:block;color:var(--tx2);font-size:13px;margin:6px 0 2px}
+
+/* live status chips */
+.chip{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;
+  letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.chip.ok{background:var(--ok-dim);color:var(--ok)}
+.chip.warn{background:var(--warn-dim);color:var(--warn)}
+.chip.err{background:var(--err-dim);color:var(--err)}
+.chip.muted{background:var(--bg3);color:var(--tx3)}
+.chip .live{width:6px;height:6px;border-radius:999px;background:currentColor;
+  animation:softPulse 1.6s ease-in-out infinite}
+
+/* HTTPS guided setup */
+.https-banner{display:flex;align-items:center;gap:9px;border-radius:4px;
+  padding:9px 12px;font-size:12px;font-weight:700;margin:0 0 12px;
+  background:var(--bg3);color:var(--tx2)}
+.https-banner.ok{background:var(--ok-dim);color:var(--ok)}
+.https-banner.warn{background:var(--warn-dim);color:var(--warn)}
+.https-banner.err{background:var(--err-dim);color:var(--err)}
+.https-banner.run{background:var(--brand-dim);color:var(--brand-hi)}
+.prov-steps{list-style:none;margin:12px 0 4px;padding:0}
+.prov-steps li{display:flex;align-items:flex-start;gap:10px;padding:6px 0;
+  color:var(--tx3);font-size:12.5px;transition:color var(--dur-fast)}
+.prov-steps li .st{width:18px;height:18px;border-radius:999px;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  border:1.5px solid var(--hair2);margin-top:1px}
+.prov-steps li.active{color:var(--tx)}
+.prov-steps li.active .st{border-color:var(--brand);animation:softPulse 1.4s infinite}
+.prov-steps li.done{color:var(--tx2)}
+.prov-steps li.done .st{border-color:var(--ok);background:var(--ok-dim);color:var(--ok)}
+.prov-steps li.error{color:var(--err)}
+.prov-steps li.error .st{border-color:var(--err);background:var(--err-dim);color:var(--err)}
+.prov-hint{font-size:11.5px;color:var(--warn);background:var(--warn-dim);
+  border-radius:4px;padding:8px 10px;margin-top:8px;display:none}
+.prov-hint.show{display:block;animation:popIn .15s var(--ease-out)}
+.hint{font-size:11px;color:var(--tx3);display:block;margin-top:4px}
+
+/* QR area motion */
+.qrblock{animation:popIn .18s var(--ease-out)}
+.qrblock img{transition:opacity .2s}
+#qrBLabel{display:flex;align-items:center;gap:6px}
+
+/* serve status line */
+.serve-status{display:flex;align-items:center;gap:8px;margin-top:10px;
+  font-size:11.5px;color:var(--tx2);flex-wrap:wrap}

@@ -54,6 +54,9 @@ class Hub:
         self._server_thread: Optional[threading.Thread] = None
         self._https_server = None
         self._https_thread: Optional[threading.Thread] = None
+        self._flask_app = None
+        self._https_host: Optional[str] = None
+        self._https_days: Optional[int] = None
         self._server_error: str = ""
 
         self._preview_cache: tuple = ()         # (mtime, bytes)
@@ -89,9 +92,8 @@ class Hub:
                        "https_port": self.settings.https_port,
                        "https_running": self.https_running,
                        "https_mode": self.settings.https_mode,
-                       "https_domain": (self.settings.acme_domain
-                                        if (self.settings.https_mode
-                                            == "letsencrypt") else ""),
+                       "https_domain": (self._https_host or ""),
+                       "https_days": self._https_days,
                        "ips": self.lan_ips(),
                        "url": self.magic_url() if self.test else ""},
             "stats": {**self.stats,
@@ -227,6 +229,7 @@ class Hub:
         self._server_error = ""
         try:
             app = create_app(self)
+            self._flask_app = app
             self._server = make_server(self.settings.host, self.settings.port, app,
                                        threaded=True)
             self._server_thread = threading.Thread(target=self._server.serve_forever,
@@ -246,26 +249,137 @@ class Hub:
         d = self.data_dir / "certs"
         return d / "trusted-fullchain.pem", d / "trusted-key.pem"
 
-    def provision_trusted(self) -> None:
-        """Issue/renew the Let's Encrypt certificate (runs in a thread)."""
+    # ------------------------------------------------------------------ HTTPS
+    PROVISION_STEPS = [
+        ("check",   "Checking your setup"),
+        ("account", "Contacting Let's Encrypt"),
+        ("dns",     "Publishing the DNS challenge"),
+        ("wait",    "Waiting for DNS (up to 3 min)"),
+        ("issue",   "Issuing the certificate"),
+        ("activate","Activating on this PC"),
+    ]
+
+    def _prov_state(self) -> dict:
+        return getattr(self, "_https_provision",
+                       {"state": "idle", "steps": [], "error": "",
+                        "detail": "", "domain": "", "ts": 0})
+
+    def _prov_step(self, step_id: str, status: str, detail: str = "") -> None:
+        p = self._prov_state()
+        p["steps"] = [{"id": i, "label": l,
+                       "status": (status if i == step_id else
+                                  next((s["status"] for s in p["steps"]
+                                        if s["id"] == i), "pending")),
+                       "detail": (detail if i == step_id else
+                                  next((s["detail"] for s in p["steps"]
+                                        if s["id"] == i), ""))}
+                     for i, l in self.PROVISION_STEPS]
+        self._https_provision = p
+        self.emit("https_progress")
+
+    def provision_trusted(self) -> dict:
+        """Guided, observable Let's Encrypt issuance (runs in a thread)."""
         import threading as _th
+        p = self._prov_state()
+        if p["state"] == "running":
+            return p
+        s = self.settings
+        self._https_provision = {"state": "running", "steps": [], "error": "",
+                                 "detail": "", "domain": s.acme_domain,
+                                 "ts": time.time()}
+
+        def fail(step_id: str, message: str, hint: str = "") -> None:
+            self._https_provision["state"] = "error"
+            self._https_provision["error"] = message
+            self._https_provision["hint"] = hint
+            self._prov_step(step_id, "error", message)
+            self.log(f"⚠ live-camera setup failed: {message}", "warn")
+            self.emit("https_progress")
 
         def run():
+            from .acme import (ACMEClient, DIR_STAGING, DIR_PROD, dns_a_lookup,
+                               issue_trusted_cert, make_csr, trusted_cert_valid)
             try:
-                from .acme import issue_trusted_cert
-                s = self.settings
-                issue_trusted_cert(s.acme_domain, s.duckdns_token,
-                                   s.acme_email or "teacher@example.com",
-                                   self.data_dir / "certs",
-                                   log=lambda m: self.log("🔒 " + m))
-                self.log("🔒 trusted certificate ready — restart the server "
-                         "to serve it", "ok")
-                self.emit("https_provisioned", domain=s.acme_domain)
+                # -- 1 · preflight ------------------------------------------
+                self._prov_step("check", "active")
+                dom, tok = s.acme_domain, s.duckdns_token
+                if not dom.endswith(".duckdns.org") or len(dom.split(".")) != 3:
+                    return fail("check", "Use a duckdns.org subdomain",
+                                "e.g. myclass.duckdns.org — create one free at "
+                                "duckdns.org")
+                if len(tok) < 8:
+                    return fail("check", "DuckDNS token missing",
+                                "Copy the token from the top of duckdns.org")
+                ips = [i for i in self.lan_ips() if not i.startswith("127.")]
+                resolved = dns_a_lookup(dom)
+                if not resolved:
+                    return fail("check", "Can't reach DNS — is this PC online?",
+                                "Issuing needs internet once; scans never do")
+                if ips and resolved and not (set(resolved) & set(ips)):
+                    return fail("check",
+                                f"{dom} points at {resolved[0]}, but this PC is "
+                                f"{ips[0]}",
+                                "Open duckdns.org → set the domain's IP to "
+                                f"{ips[0]} → press Start again (takes effect in "
+                                "≈1 min)")
+                self._prov_step("check", "done")
+
+                # -- 2-5 · issue (progress comes back via steps) -------------
+                self._prov_step("account", "active")
+                out_dir = self.data_dir / "certs"
+                cert_p, key_p = self._issue_with_progress(s, out_dir, fail)
+                if not cert_p:
+                    return
+                self._prov_step("activate", "active")
+                self._restart_https()
+                self._prov_step("activate", "done")
+                self._https_provision["state"] = "ok"
+                self._https_provision["expires"] = trusted_cert_valid(
+                    cert_p, 0)
+                self.log(f"🔒 live camera ready — https://{dom}:"
+                         f"{s.https_port} (no student setup needed)", "ok")
+                self.emit("https_progress")
             except Exception as e:
-                self.log(f"⚠ certificate provisioning failed: {e}", "warn")
-                self.emit("https_provision_failed", error=str(e))
+                fail("issue", str(e)[:200])
 
         _th.Thread(target=run, name="optibubble-acme", daemon=True).start()
+        return self._prov_state()
+
+    def _issue_with_progress(self, s, out_dir, fail):
+        """Drive acme.issue_trusted_cert while reporting step transitions."""
+        from .acme import ACMEClient, DIR_PROD, issue_trusted_cert
+        step_map = {"account": "account", "dns": "dns", "wait": "wait",
+                    "issue": "issue"}
+        last = {"n": 0}
+
+        def progress(msg: str) -> None:
+            self.log("🔒 " + msg)
+            if "ACME account" in msg:
+                self._prov_step("account", "done")
+                self._prov_step("dns", "active")
+            elif "DNS-01 challenge" in msg:
+                self._prov_step("dns", "done")
+                self._prov_step("wait", "active")
+            elif "propagation" in msg:
+                last["n"] += 1
+                self._prov_step("wait", "active",
+                                f"{last['n'] * 15}s elapsed" if last["n"] > 1
+                                else "")
+            elif "TXT record did not propagate" in msg:
+                fail("wait", "DNS did not confirm the record in time",
+                     "Check the token at duckdns.org, then press Start again")
+            elif "certificate issued" in msg:
+                self._prov_step("wait", "done")
+                self._prov_step("issue", "done")
+
+        try:
+            return issue_trusted_cert(
+                s.acme_domain, s.duckdns_token,
+                s.acme_email or "teacher@example.com", out_dir,
+                progress_every=15, log=progress)
+        except Exception as e:
+            fail("issue", str(e)[:200])
+            return None
 
     def _start_https(self, app) -> None:
         """Serve the same app over TLS — trusted cert when configured, else
@@ -278,6 +392,15 @@ class Hub:
             if (self.settings.https_mode == "letsencrypt"
                     and self.settings.acme_domain and trusted_cert_valid(tc, 0)):
                 leaf_c, leaf_k = tc, tk
+                self._https_host = self.settings.acme_domain
+                try:
+                    from cryptography import x509 as _x
+                    import datetime as _dt
+                    _c = _x.load_pem_x509_certificate(tc.read_bytes())
+                    self._https_days = (_c.not_valid_after_utc - _dt.datetime.now(
+                        _dt.timezone.utc)).days
+                except Exception:
+                    self._https_days = None
                 if not trusted_cert_valid(tc, 30):
                     self.log("🔒 trusted certificate expiring soon — "
                              "renewing in the background")
@@ -285,6 +408,8 @@ class Hub:
                 self.log(f"🔒 serving trusted HTTPS for "
                          f"{self.settings.acme_domain}")
             else:
+                self._https_host = None
+                self._https_days = None
                 from .localca import ensure_ca, load_ca, issue_leaf
                 ca_cert_p, ca_key_p = ensure_ca(cert_dir)
                 ca_cert, ca_key = load_ca(ca_cert_p, ca_key_p)
@@ -300,12 +425,26 @@ class Hub:
             self._https_thread = threading.Thread(
                 target=srv.serve_forever, name="optibubble-https", daemon=True)
             self._https_thread.start()
-            self.log(f"🔒 HTTPS bridge ready on :{self.settings.https_port} "
-                     "(live mobile camera)")
+            host_note = (f" for {self._https_host}" if self._https_host
+                         else " (install code A once)")
+            self.log(f"🔒 HTTPS bridge ready on :{self.settings.https_port}"
+                     f"{host_note}")
         except Exception as e:
             self._https_server = None
             self.log(f"⚠ HTTPS bridge unavailable ({e}) — the scanner falls "
                      "back to the native camera app", "warn")
+
+    def _restart_https(self) -> None:
+        """Swap the TLS listener to the newest certificate without stopping
+        the app (used right after a certificate is issued)."""
+        if self._https_server is not None:
+            try:
+                self._https_server.shutdown()
+            except Exception:
+                pass
+            self._https_server = None
+        if self._flask_app is not None:
+            self._start_https(self._flask_app)
 
     def stop_server(self) -> None:
         if self._https_server is not None:
@@ -327,12 +466,7 @@ class Hub:
     def https_url(self, ip: Optional[str] = None) -> str:
         if not self.test:
             return ""
-        host = ip or self.lan_ips()[0]
-        from .acme import trusted_cert_valid
-        tc, _ = self.trusted_cert_paths()
-        if (self.settings.https_mode == "letsencrypt"
-                and self.settings.acme_domain and trusted_cert_valid(tc, 0)):
-            host = self.settings.acme_domain
+        host = self._https_host or ip or self.lan_ips()[0]
         return (f"https://{host}:{self.settings.https_port}/scan/"
                 f"{self.test.session_token}")
 

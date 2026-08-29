@@ -11,7 +11,7 @@ Print dynamic answer sheets → students photograph them with **any phone browse
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-425466)](#-platform-support)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-22C55E.svg)](LICENSE)
 [![Privacy](https://img.shields.io/badge/privacy-100%25%20local%2C%20no%20cloud-3B82F6)](#-privacy)
-[![Self-test](https://img.shields.io/badge/self--test-46%2F46%20green-22C55E)](#-development)
+[![Self-test](https://img.shields.io/badge/self--test-49%2F49%20green-22C55E)](#-development)
 
 *No Scantron hardware. No cloud subscription. No app store. No student data leaving the room.*
 
@@ -154,7 +154,7 @@ python selftest.py
 Builds a sheet, simulates filled bubbles (pen strokes, partial marks), synthesises phone
 photos (perspective jitter, brightness gradients, sensor noise, JPEG artefacts) across
 random seeds, and asserts exact scores, flag types, student-ID reads, the full HTTP
-stack and the < 3 s latency budget — **46 checks, expect all green**.
+stack and the < 3 s latency budget — **49 checks, expect all green**.
 
 ### 3 · Launch
 
@@ -261,14 +261,17 @@ phones       :  scan QR B → https://yourclass.duckdns.org:5443/scan/…
   renewal talk to the internet; photos and results stay on the LAN.
 * **Automatic renewal** ~30 days before the 90-day certificate expires.
 
-**Setup — one minute, once, on the teacher PC only** (details in
-[`setup.md` §4.5](setup.md)):
-
-1. Create a free subdomain at [duckdns.org](https://www.duckdns.org) and point
-   it at this PC's LAN IP.
-2. Settings → *HTTPS for the live camera* → mode **Trusted** → paste the
-   domain + DuckDNS token → **Issue certificate** (~2–3 min, once).
-3. Restart the server — QR B now carries the `https://…duckdns.org` link.
+**Setup — one minute, once, on the teacher PC only.** Settings →
+*Live camera (HTTPS)* → mode **Trusted** → paste your free
+[duckdns.org](https://www.duckdns.org) domain + token → press
+**Set up the live camera**. A guided checklist shows live progress
+(*checking your setup → contacting Let's Encrypt → publishing the DNS
+challenge → waiting for DNS → issuing → activating*) and the certificate
+**activates itself — no restart**. The pre-flight step even catches the classic
+mistake (the domain pointing at the wrong IP) and tells you the exact fix.
+Afterwards the Scan & Serve page drops to a **single “Scan to grade” QR code**
+with a *Trusted HTTPS · yourclass.duckdns.org* status chip. See
+[`setup.md` §4.5](setup.md) for the full walkthrough.
 
 **No internet in the classroom?** Leave HTTPS mode on *Local CA* (students
 scan code A once to trust your PC; Android users should use Firefox), or rely
@@ -446,7 +449,7 @@ Yes — the bundled Tauri 2 shell (<code>src-tauri/</code>) wraps the same UI in
 ```
 OPTIBubble/
 ├── main.py                  # launcher (app / --serve / --demo / --selftest)
-├── selftest.py              # 46-check end-to-end verification suite
+├── selftest.py              # 49-check end-to-end verification suite
 ├── setup.md                 # setup · local builds · GitHub · Actions releases
 ├── make_assets.py           # regenerates logo/brand assets from bundled fonts
 ├── requirements.txt
@@ -494,7 +497,7 @@ page — the entire system runs from this computer and the Wi-Fi router in your 
 
 ```bash
 pip install -r requirements-dev.txt
-python selftest.py              # 46-check end-to-end suite
+python selftest.py              # 49-check end-to-end suite
 python make_assets.py           # regenerate brand assets from the bundled fonts
 python tools/otf2ttf.py         # re-convert the wordmark OTF → embeddable TTF
 python docs/shot_pipeline.py    # rebuild the pipeline figure

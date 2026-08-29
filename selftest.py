@@ -18,6 +18,7 @@ Run:  python selftest.py
 from __future__ import annotations
 
 import io
+import json
 import random
 import sys
 import tempfile
@@ -342,6 +343,49 @@ def main() -> int:
     r = client.get("/api/results/export.csv")
     check("CSV export download", r.status_code == 200 and b"Student_ID" in r.data)
     check("QR endpoint", client.get("/api/qr.png").status_code == 200)
+
+    # ---- HTTPS provisioning: state machine + the DoH quote regression -------
+    r = client.get("/api/https/status")
+    check("provision status endpoint", r.status_code == 200
+          and r.get_json()["state"] in ("idle", "running", "ok", "error"))
+
+    import optibubble.acme as _acme_mod
+
+    class _FakeResp:
+        def __init__(self, payload): self._p = payload
+        def read(self): return json.dumps(self._p).encode()
+        @property
+        def headers(self): return {}
+
+    _orig_http = _acme_mod._http
+    _acme_mod._http = lambda url, data=None, headers=None, timeout=30: _FakeResp({
+        "Status": 0, "Answer": [
+            {"name": "_acme-challenge.x.duckdns.org", "type": 16,
+             "data": "\"uzDivPLMMHM5VReMO5yMj7uxkMraDSTf_Enxwo1Cs1I\""}]})
+    try:
+        vals = _acme_mod.dns_txt_lookup("x.duckdns.org")
+        check("DNS TXT quote-stripping (the stalled-setup bug)",
+              vals == ["uzDivPLMMHM5VReMO5yMj7uxkMraDSTf_Enxwo1Cs1I"], str(vals))
+    finally:
+        _acme_mod._http = _orig_http
+
+    # preflight rejects a mismatched domain without touching the network
+    hub.settings.https_mode = "letsencrypt"
+    hub.settings.acme_domain = "optibubble.duckdns.org"
+    hub.settings.duckdns_token = "0123456789abcdef"
+    _orig_lan = hub.lan_ips
+    hub.lan_ips = lambda: ["203.0.113.7"]
+    try:
+        import optibubble.acme as _am
+        _am.dns_a_lookup = lambda d: ["198.51.100.9"]
+        hub.provision_trusted()
+        import time as _t; _t.sleep(0.8)
+        pst = hub._prov_state()
+        check("preflight catches wrong-IP domain with a fix hint",
+              pst["state"] == "error" and "duckdns.org" in pst.get("hint", "")
+              and "198.51.100.9" in pst["error"], pst["error"][:60])
+    finally:
+        hub.lan_ips = _orig_lan
 
     # ---- trusted-HTTPS building blocks (offline unit checks) ---------------
     from optibubble.acme import duckdns_txt_url, make_csr, trusted_cert_valid

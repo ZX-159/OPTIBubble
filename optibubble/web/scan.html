@@ -113,14 +113,14 @@ input[type=file]{display:none}
 <body>
 <header>
   <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" onerror="this.style.display='none'">
-  <div class="chip" id="secChip" style="display:none">🔒 Secure camera</div>
+  <div class="chip" id="secChip" style="display:none"><span data-mico="lock" data-size="12"></span>&nbsp;Secure camera</div>
   <div class="chip" id="netChip"><span class="dot"></span>Connected</div>
 </header>
 
 <main>
   <!-- STEP 0: intro / permission -->
   <section id="steps" class="card pop">
-    <span class="badge ok">📱 Scan with your phone</span>
+    <span class="badge ok"><span data-mico="camera" data-size="14"></span>&nbsp;Scan with your phone</span>
     <h1 id="testTitle" style="font-size:19px">Loading test…</h1>
     <p class="sub" id="testSub">—</p>
     <ol>
@@ -129,8 +129,8 @@ input[type=file]{display:none}
       <li>Snap — grading happens instantly on the teacher's computer</li>
     </ol>
     <div class="actions">
-      <button class="btn" id="startBtn">📷&nbsp; Start camera</button>
-      <button class="btn ghost" id="fileBtnAlt">🖼️&nbsp; Upload photo</button>
+      <button class="btn" id="startBtn"><span data-mico="camera" data-size="16"></span>&nbsp;Start camera</button>
+      <button class="btn ghost" id="fileBtnAlt"><span data-mico="image" data-size="16"></span>&nbsp;Upload photo</button>
     </div>
     <input type="file" id="fileInput" accept="image/*" capture="environment">
   </section>
@@ -146,9 +146,9 @@ input[type=file]{display:none}
       </div>
     </div>
     <div class="controls">
-      <button class="roundbtn" id="torchBtn" title="Torch">🔦</button>
+      <button class="roundbtn" id="torchBtn" title="Torch"><span data-mico="torch" data-size="19"></span></button>
       <button class="shutter" id="shutterBtn" aria-label="Capture"></button>
-      <button class="roundbtn" id="galleryBtn" title="Choose from gallery">🖼️</button>
+      <button class="roundbtn" id="galleryBtn" title="Choose from gallery"><span data-mico="image" data-size="19"></span></button>
     </div>
   </section>
 
@@ -158,7 +158,7 @@ input[type=file]{display:none}
     <div id="quickWarn" class="warnbox hidden"></div>
     <div class="actions">
       <button class="btn ghost" id="retakeBtn">Retake</button>
-      <button class="btn ok" id="sendBtn">Send&nbsp;✓</button>
+      <button class="btn ok" id="sendBtn">Send&nbsp;<span data-mico="check" data-size="14"></span></button>
     </div>
   </section>
 
@@ -181,6 +181,16 @@ input[type=file]{display:none}
 
 <script>
 "use strict";
+const MICO={
+ camera:'<path d="M14.5 4h-5L7.3 6.8H4a2 2 0 0 0-2 2V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8.8a2 2 0 0 0-2-2h-3.3Z"/><circle cx="12" cy="13" r="3.2"/>',
+ image:'<rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="9" cy="9" r="1.8"/><path d="m21 15.5-3.4-3.4a2 2 0 0 0-2.8 0L6 21"/>',
+ torch:'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.4-.5-2-1-3-1.1-2.1-.2-4.1 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.2.4-2.3 1-3a2.5 2.5 0 0 0 2.5 2.5Z"/>',
+ lock:'<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+ check:'<path d="M20 6 9 17l-5-5"/>',
+ alert:'<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+ user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/>'};
+const mico=(n,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-.35em;display:inline-block">${MICO[n]}</svg>`;
+document.addEventListener("DOMContentLoaded",()=>{document.querySelectorAll("[data-mico]").forEach(el=>{el.innerHTML=mico(el.dataset.mico,el.dataset.size||20);});});
 const $=id=>document.getElementById(id);
 const token=location.pathname.split("/").pop();
 let stream=null,track=null,torchOn=false,capturedBlob=null;
@@ -197,7 +207,7 @@ fetch("/api/info/"+token).then(r=>r.json()).then(d=>{
     if(d.width)CFG.width=d.width;}
   else{$("testTitle").textContent="Session not found";
     $("testSub").textContent="Please scan the QR code on the teacher's screen again.";}
-}).catch(()=>{$("netChip").innerHTML="⚠️ Offline";});
+}).catch(()=>{$("netChip").innerHTML=mico("alert",12)+" Offline";});
 
 /* ---------- view switch ---------- */
 function show(id){for(const v of["steps","cameraView","confirmView","uploadView","resultView"])
@@ -302,7 +312,7 @@ function confirmStage(){
   $("preview").src=url;show("confirmView");
   const wb=$("quickWarn");wb.classList.add("hidden");
   quickCheck(capturedBlob,w=>{
-    if(w.length){wb.innerHTML="⚠️ <b>Quick check:</b><br>• "+w.join("<br>• ")+
+    if(w.length){wb.innerHTML="<b>Quick check</b><br>• "+w.join("<br>• ")+
       "<br><br>You can retake, or send anyway — the desktop will verify.";
       wb.classList.remove("hidden");}
   });
@@ -342,13 +352,13 @@ function showResult(r){
   const b=$("resultBody");
   if(r.status==="auto"){
     const pct=r.max?Math.round(100*r.score/r.max):0;
-    b.innerHTML=`<div class="pop"><span class="badge ok">✓ Graded instantly</span>
+    b.innerHTML=`<div class="pop"><span class="badge ok"><span data-mico="check" data-size="12"></span>&nbsp;Graded instantly</span>
       <div style="font-size:13px;color:var(--muted)">Student ${r.student_id?esc(r.student_id):"—"}</div>
       <div class="big" style="color:#86EFAC">${r.score}<span style="font-size:20px;color:var(--muted)">/${r.max}</span></div>
       <div class="scoreline"><div><b>${pct}%</b><span>score</span></div>
       <div><b>${Math.round(r.confidence*100)}%</b><span>confidence</span></div></div></div>`;
   }else{
-    b.innerHTML=`<div class="pop"><span class="badge warn">👤 Sent for review</span>
+    b.innerHTML=`<div class="pop"><span class="badge warn"><span data-mico="user" data-size="12"></span>&nbsp;Sent for review</span>
       <h1 style="font-size:17px;margin:10px 0 4px">Flagged for the teacher</h1>
       <p class="sub" style="margin:0">${r.flags&&r.flags.length?r.flags.length+" item(s) need a human check (faint / double / blank marks).":"Manual verification requested."}</p>
       <ul class="flags">${(r.flags||[]).slice(0,6).map(f=>"<li>• "+esc(f.message||f.kind)+"</li>").join("")}</ul></div>`;
@@ -358,7 +368,7 @@ function showResult(r){
 
 function showError(code,msg,hint){
   const b=$("resultBody");
-  b.innerHTML=`<div class="pop"><span class="badge err">✕ ${esc(code)}</span>
+  b.innerHTML=`<div class="pop"><span class="badge err"><span data-mico="alert" data-size="12"></span>&nbsp;${esc(code)}</span>
     <h1 style="font-size:17px;margin:10px 0 6px">${esc(msg)}</h1>
     <p class="sub" style="margin:0">${esc(hint||"")}</p></div>`;
   show("resultView");
