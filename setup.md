@@ -44,7 +44,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 49/49 checks passed · ALL GREEN
+python selftest.py                 # expect: 56/56 checks passed · ALL GREEN
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -284,8 +284,7 @@ git push origin main --tags
 
 ## 6 · The complete `main.yml` (verbatim)
 
-This is the exact file at `.github/workflows/main.yml` in the repo —
-CI on every push/PR (self-test **+ Rust shell check**), installers on tags:
+This is the exact file at `.github/workflows/main.yml` in the repo:
 
 ```yaml
 # ============================================================================
@@ -315,7 +314,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (49 checks)
+    name: Self-test (56 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

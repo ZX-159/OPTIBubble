@@ -35,6 +35,7 @@ from urllib.parse import quote
 from flask import (Flask, Response, jsonify, request, send_file, abort)
 
 from .hub import Hub
+from .storage import CSV_COLUMNS
 
 MAX_CONTENT_LENGTH_MB = 100
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -188,6 +189,9 @@ def create_app(hub: Hub) -> Flask:
         errs = cfg.validate()
         if errs:
             return jsonify({"errors": errs}), 400
+        auto_key = len(cfg.answer_key) == 0
+        if auto_key:                      # friendly default: full random key
+            cfg.randomize_key()
         missing = cfg.num_questions - len(cfg.answer_key)
         try:
             hub.create_test(cfg, generate_pdf=True)
@@ -197,17 +201,35 @@ def create_app(hub: Hub) -> Flask:
         for w in (hub.layout.warnings if hub.layout else []):
             hub.log(f"ℹ {w}")
         return jsonify({"ok": True, "test_id": cfg.test_id,
-                        "missing_key": missing,
+                        "missing_key": missing, "auto_key": auto_key,
                         "warnings": (hub.layout.warnings if hub.layout else [])})
 
     @app.route("/api/key", methods=["POST"])
     def update_key():
         d = request.get_json(silent=True) or {}
-        ok = hub.update_key(d.get("entries") or {})
+        ok = hub.update_key(d.get("entries") or {}, replace=bool(d.get("replace")))
         return jsonify({"ok": ok,
                         "defined": len(hub.test.answer_key) if hub.test else 0,
                         "total": hub.test.num_questions if hub.test else 0}
                        ), (200 if ok else 404)
+
+    @app.route("/api/tests/<test_id>", methods=["GET"])
+    def get_test(test_id: str):
+        data = hub.storage.load_test(test_id)
+        if not data:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(data)
+
+    @app.route("/api/tests/<test_id>/edit", methods=["POST"])
+    def edit_test(test_id: str):
+        d = request.get_json(silent=True) or {}
+        ok, errs = hub.edit_test(test_id, d)
+        return jsonify({"ok": ok, "errors": errs}), (200 if ok else 400)
+
+    @app.route("/api/tests/<test_id>/delete", methods=["POST"])
+    def delete_test(test_id: str):
+        ok, msg = hub.delete_test(test_id)
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 404)
 
     @app.route("/api/tests/<test_id>/open", methods=["POST"])
     def open_test(test_id: str):
@@ -301,13 +323,21 @@ def create_app(hub: Hub) -> Flask:
 
     @app.route("/api/results/export.csv")
     def results_export():
+        import csv as _csv
+        import io as _io
         if not hub.test:
-            abort(404)
+            return jsonify({"error": "no active test"}), 404
         p = hub.storage.test_root(hub.test) / "results.csv"
-        if not p.exists():
-            abort(404)
-        return send_file(p, as_attachment=True,
-                         download_name=f"{hub.test.test_id}_results.csv")
+        buf = _io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=CSV_COLUMNS)
+        w.writeheader()
+        if p.exists():
+            with p.open(newline="", encoding="utf-8") as f:
+                for row in _csv.DictReader(f):
+                    w.writerow(row)
+        return Response(buf.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename={hub.test.test_id}_results.csv"})
 
     @app.route("/api/crop")
     def crop():

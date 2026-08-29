@@ -542,6 +542,44 @@ def main() -> int:
     check("API accepts sheet-design fields", r.status_code == 200 and j.get("ok"),
           str(j.get("errors", ""))[:60])
 
+    # ---- test management: auto-key · edit · delete · empty export ---------
+    r = client.post("/api/tests", content_type="application/json", json={
+        "title": "AutoKey", "num_questions": 6, "options_per_question": 4})
+    j = r.get_json()
+    auto_id = j.get("test_id")
+    check("empty key → auto-generated, complete",
+          r.status_code == 200 and j.get("auto_key") is True
+          and j.get("missing_key") == 0, str(j)[:70])
+
+    r = client.post(f"/api/tests/{auto_id}/edit", json={
+        "title": "AutoKey Edited", "answer_key":
+            {str(i): "BCDA"[i % 4] for i in range(1, 7)}})
+    check("edit test (rename + replace key)", r.status_code == 200
+          and r.get_json().get("ok"))
+    d = client.get(f"/api/tests/{auto_id}").get_json()
+    check("edits persisted + sheet PDF regenerated",
+          d["test"]["title"] == "AutoKey Edited"
+          and len(d["test"]["answer_key"]) == 6
+          and (Path(hub.data_dir) / "tests" / auto_id / "sheet.pdf").exists())
+
+    r = client.post(f"/api/tests/{auto_id}/edit", json={"num_questions": 40})
+    check("structural edit rejected with guidance",
+          r.status_code == 400 and "new test" in " ".join(
+              r.get_json().get("errors", [])))
+
+    hub.open_test(auto_id)
+    r = client.get("/api/results/export.csv")
+    check("empty results CSV exports header-only (no error)",
+          r.status_code == 200 and r.data.count(b"Student_ID") == 1
+          and r.data.count(b"\n") == 1)
+
+    r = client.post(f"/api/tests/{auto_id}/delete")
+    check("delete test removes folder",
+          r.status_code == 200 and not (Path(hub.data_dir) / "tests" /
+                                        auto_id).exists())
+    r = client.get(f"/api/tests/{auto_id}")
+    check("deleted test is gone", r.status_code == 404)
+
     print()
     bad = [n for n, ok, _ in results if not ok]
     print(f"{len(results) - len(bad)}/{len(results)} checks passed")

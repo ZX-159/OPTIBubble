@@ -120,19 +120,34 @@ function renderDashboard() {
     $("pdfLink").style.display = "none";
   }
   const rt = S.tests || [];
+  $("testsCount").textContent = rt.length;
+  $("newTestBtn").onclick = () => goto("setup");
   $("recentTests").innerHTML = rt.length ? `<table class="tbl"><thead><tr>
-      <th>Title</th><th>ID</th><th>Questions</th><th>Graded</th><th></th></tr></thead><tbody>` +
-    rt.slice(0, 10).map(t => `<tr>
-      <td><b>${esc(t.title)}</b>${st.test && t.test_id === st.test.test_id ?
-        ' <span class="badge info">active</span>' : ""}</td>
-      <td class="mono">${esc(t.test_id)}</td><td>${t.num_questions}</td><td>${t.graded || 0}</td>
-      <td><button class="btn sm ghost" data-open="${esc(t.test_id)}">Open</button></td></tr>`).join("") +
-    "</tbody></table>" : '<p class="muted">No saved tests yet.</p>';
+      <th>Test</th><th>Questions</th><th>Graded</th><th style="width:150px"></th></tr></thead><tbody>` +
+    rt.map(t => `<tr>
+      <td><b>${esc(t.title)}</b>
+        ${st.test && t.test_id === st.test.test_id ? '<span class="badge info">active</span>' : ""}
+        <div class="muted" style="font-size:10.5px">${esc(t.test_id)} · ${esc(t.subject || "")}</div></td>
+      <td>${t.num_questions}<span class="muted">×${t.options_per_question}</span></td>
+      <td>${t.graded || 0}</td>
+      <td><div class="trow-actions">
+        <button class="btn sm ghost" data-open="${esc(t.test_id)}">${icon("arrow", 12)}Open</button>
+        <button class="iconb" title="Edit" data-edit="${esc(t.test_id)}">${icon("pencil", 14)}</button>
+        <button class="iconb danger" title="Delete" data-del="${esc(t.test_id)}">${icon("trash", 14)}</button>
+      </div></td></tr>`).join("") +
+    "</tbody></table>" :
+    `<div class="emptystate">${icon("file", 30)}<b>No tests yet</b>` +
+    `Create your first answer sheet — it takes under a minute.</div>`;
   $("recentTests").querySelectorAll("[data-open]").forEach(b =>
     b.onclick = async () => {
       await api("/api/tests/" + b.dataset.open + "/open", {method: "POST"});
-      toast("Test opened", "ok"); refresh(true); goto("serve");
+      toast("Test opened — serve, review and results now show it", "ok");
+      refresh(true); goto("serve");
     });
+  $("recentTests").querySelectorAll("[data-edit]").forEach(b =>
+    b.onclick = () => openEditDialog(b.dataset.edit));
+  $("recentTests").querySelectorAll("[data-del]").forEach(b =>
+    b.onclick = () => confirmDelete(b.dataset.del));
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -226,10 +241,10 @@ function initSetup() {
       const r = await api("/api/tests", {method: "POST",
         headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       toast("Test created — sheet ready to print", "ok");
-      if (r.missing_key > 0) {
-        toast(`Key incomplete — ${r.missing_key} question(s) undefined. ` +
-              "You can print now and finish the key on Scan & Serve.");
-      }
+      if (r.auto_key)
+        toast("Answer key auto-generated — edit it anytime", "ok");
+      else if (r.missing_key > 0)
+        toast(`Key incomplete — ${r.missing_key} undefined. Finish it on Scan & Serve.`);
       (r.warnings || []).forEach(w => toast("ℹ " + w));
       $("previewBox").style.display = "";
       $("previewPdf").src = "/api/sheet.pdf?" + Date.now();
@@ -424,7 +439,7 @@ async function loadReview() {
     card.dataset.flag = i;
     card.tabIndex = -1;
     card.innerHTML = `
-      ${f.crop ? `<img src="${esc(f.crop)}" alt="crop">` :
+      ${f.crop ? `<img src="${esc(f.crop)}" alt="crop" data-crop="${esc(f.crop)}" data-cap="${esc(f.message || '')}" style="cursor:zoom-in">` :
         `<div class="muted" style="font-size:12px">no preview</div>`}
       <div>
         <b style="color:var(--warn2); font-size:13.5px">${esc(kindLabel(f.kind))}</b>
@@ -434,6 +449,9 @@ async function loadReview() {
           <button data-v="" class="${!f.guess ? "set" : ""}" style="min-width:64px">Blank</button>
         </div>
       </div>`;
+    const cropImg = card.querySelector("img[data-crop]");
+    if (cropImg) cropImg.onclick = () =>
+      lightbox(cropImg.dataset.crop, cropImg.dataset.cap);
     card.querySelectorAll(".ops button").forEach(b => b.onclick = () => {
       S.overrides[i] = b.dataset.v || null;
       card.querySelectorAll(".ops button").forEach(x => x.classList.remove("set"));
@@ -611,6 +629,130 @@ async function saveOne(key, value) {
     headers: {"Content-Type": "application/json"}, body: JSON.stringify({[key]: value})});
 }
 
+/* ------------------------------------------------- modals & lightbox */
+function modal(html) {
+  const ov = document.createElement("div");
+  ov.className = "overlay";
+  ov.innerHTML = `<div class="modal">${html}</div>`;
+  ov.addEventListener("mousedown", e => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+  hydrateIcons(ov);
+  return ov;
+}
+function lightbox(src, caption) {
+  const lb = document.createElement("div");
+  lb.className = "lightbox";
+  lb.innerHTML = `<button class="iconb close">${icon("x", 18)}</button>` +
+    `<img src="${esc(src)}" alt="crop">` +
+    `<div class="cap">${icon("eye", 14)}${esc(caption || "")} · click anywhere to close</div>`;
+  lb.onclick = () => lb.remove();
+  document.onkeydown = e => { if (e.key === "Escape") { lb.remove(); document.onkeydown = null; } };
+  document.body.appendChild(lb);
+}
+
+async function confirmDelete(testId) {
+  const t = (S.tests || []).find(x => x.test_id === testId) || {};
+  const ov = modal(`
+    <h3>${icon("trash", 16)} Delete “${esc(t.title || testId)}”?</h3>
+    <p class="sub">This permanently removes its answer sheet, every received
+       photo, the review queue and <b>all graded results</b>. This cannot be
+       undone.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-x="cancel">Keep it</button>
+      <button class="btn danger" data-x="yes">${icon("trash", 13)}Delete everything</button>
+    </div>`);
+  ov.querySelector("[data-x=cancel]").onclick = () => ov.remove();
+  ov.querySelector("[data-x=yes]").onclick = async () => {
+    ov.querySelector("[data-x=yes]").classList.add("loading");
+    try {
+      await api(`/api/tests/${testId}/delete`, {method: "POST"});
+      ov.remove(); toast("Test deleted", "ok"); refresh(true); renderDashboard();
+    } catch (e) {
+      toast((e.data && e.data.message) || "could not delete", "err");
+      ov.remove();
+    }
+  };
+}
+
+async function openEditDialog(testId) {
+  let d;
+  try { d = await api(`/api/tests/${testId}`); }
+  catch { toast("Could not load the test", "err"); return; }
+  const t = d.test || {};
+  const keyTxt = Object.keys(t.answer_key || {}).length
+    ? Object.entries(t.answer_key).sort((a, b) => a[0] - b[0])
+        .map(([q, a]) => `${q}:${a}`).join(" ")
+    : "";
+  const ov = modal(`
+    <h3>${icon("pencil", 15)} Edit test</h3>
+    <p class="sub">Structure (questions, options, paper) is fixed once printed —
+       everything else can change.</p>
+    <div class="field"><label>Title</label>
+      <input type="text" id="edTitle" maxlength="80" value="${esc(t.title || "")}"></div>
+    <div class="field"><label>Subject</label>
+      <input type="text" id="edSubject" maxlength="80" value="${esc(t.subject || "")}"></div>
+    <div class="field"><label>Answer key</label>
+      <input type="text" id="edKey" class="mono" placeholder="1:A 2:C … or ABCD…" value="${esc(keyTxt)}">
+      <span class="hint">Replace the whole key — every question needs one.
+        Leave empty to keep the current key.</span></div>
+    <p class="hint" id="edErr" style="color:var(--err2);display:none"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-x="cancel">Cancel</button>
+      <button class="btn" data-x="save">${icon("check", 13)}Save changes</button>
+    </div>`);
+  ov.querySelector("[data-x=cancel]").onclick = () => ov.remove();
+  ov.querySelector("[data-x=save]").onclick = async () => {
+    const body = {title: $("edTitle").value, subject: $("edSubject").value};
+    const kt = $("edKey").value.trim();
+    if (kt) {
+      const entries = {};
+      const kv = kt.toUpperCase().match(/(\d{1,3})\s*[:.\-]\s*([A-E])/g) || [];
+      kv.forEach(m => { const g = m.match(/(\d{1,3})\s*[:.\-]\s*([A-E])/);
+                        entries[+g[1]] = g[2]; });
+      if (!kv.length) [...kt.toUpperCase().replace(/[^A-E]/g, "")].forEach(
+        (a, i) => { entries[i + 1] = a; });
+      body.answer_key = entries;
+    }
+    const btn = ov.querySelector("[data-x=save]");
+    btn.classList.add("loading");
+    try {
+      const r = await api(`/api/tests/${testId}/edit`, {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)});
+      if (r.ok) { ov.remove(); toast("Test updated — sheet PDF refreshed", "ok");
+        refresh(true); renderDashboard(); renderServe(); }
+      else throw r;
+    } catch (e) {
+      const errs = (e.data && e.data.errors) || ["Could not save."];
+      $("edErr").textContent = "• " + errs.join("  • ");
+      $("edErr").style.display = "";
+      btn.classList.remove("loading");
+    }
+  };
+}
+
+/* ------------------------------------------------- per-test chips */
+function renderTestChips(st) {
+  const t = st.test;
+  const chips = [["testChipServe", "serve"], ["testChipReview", "review"],
+                 ["testChipResults", "results"]];
+  chips.forEach(([id]) => {
+    const el = $(id); if (!el) return;
+    if (!t) {
+      el.innerHTML = `<i data-icon="info" data-size="13"></i>No active test —
+        <a href="#" data-goto="dashboard">pick one</a>`;
+    } else {
+      el.innerHTML = icon("file", 13) +
+        `<span>Working on</span><b title="${esc(t.title)}">${esc(t.title)}</b>
+         <span class="mono">${esc(t.test_id)}</span>
+         <a href="#" data-goto="dashboard">switch</a>`;
+    }
+    hydrateIcons(el);
+  });
+  document.querySelectorAll(".testchip a[data-goto]").forEach(a =>
+    a.onclick = e => { e.preventDefault(); goto(a.dataset.goto); });
+}
+
 /* ------------------------------------------------------- HTTPS wizard */
 let httpsPoll = null;
 
@@ -746,8 +888,9 @@ async function refresh(force = false) {
     document.querySelectorAll(".ver").forEach(e => e.textContent = st.version);
     $("dataDir").textContent = st.data_dir;
     updateServerPill(st);
-    if (S.page === "dashboard") renderDashboard();
-  api("/api/tests").then(tl => { S.tests = tl;
+    renderTestChips(st);
+      if (S.page === "dashboard") renderDashboard();
+    api("/api/tests").then(tl => { S.tests = tl;
     if (S.page === "dashboard") renderDashboard(); }).catch(() => {});
     if (S.page === "serve") { renderServe(); if (logGrew || force) renderLog(st); }
     if (S.page === "review") {

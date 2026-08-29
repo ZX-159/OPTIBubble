@@ -156,12 +156,14 @@ class Hub:
         p = self.storage.test_root(self.test) / "sheet.pdf"
         return p if p.exists() else None
 
-    def update_key(self, entries: dict) -> bool:
-        """Merge answer-key entries into the active test (define-key-later)."""
+    def update_key(self, entries: dict, replace: bool = False) -> bool:
+        """Merge (or replace) answer-key entries in the active test."""
         if not self.test:
             return False
         k = self.test.options_per_question
         letters = "ABCDEFGHIJ"[:k]
+        if replace:
+            self.test.answer_key = {}
         for q, a in (entries or {}).items():
             try:
                 qn = int(q)
@@ -175,6 +177,77 @@ class Hub:
                  f"{self.test.num_questions} defined"
                  + ("" if complete else " (grading scores defined questions only)"))
         return True
+
+    # ------------------------------------------------------------- management
+    EDITABLE_FIELDS = ("title", "subject", "sheet_instructions",
+                       "header_font_scale", "logo_position", "write_in_fields")
+    STRUCTURAL_FIELDS = ("num_questions", "options_per_question",
+                         "student_id_digits", "page_size")
+
+    def delete_test(self, test_id: str) -> Tuple[bool, str]:
+        """Remove a saved test and all its data. Returns (ok, message)."""
+        import shutil
+        from .config import tests_dir as _tests_dir
+        root = _tests_dir(self.data_dir) / test_id
+        if not root.exists():
+            return False, "No such test."
+        if self.test and self.test.test_id == test_id:
+            self.stop_server()
+            self.test, self.layout = None, None
+            self.emit("test_closed")
+        try:
+            shutil.rmtree(root)
+        except OSError as e:
+            return False, f"Could not delete: {e}"
+        self.log(f"Test {test_id} deleted")
+        self.emit("tests_changed")
+        return True, "deleted"
+
+    def edit_test(self, test_id: str, changes: dict) -> Tuple[bool, List[str]]:
+        """Edit metadata/design/answer key of a saved (or active) test.
+
+        Structural fields (question count, options, paper, ID digits) cannot
+        change after creation — printed sheets would no longer match.
+        """
+        data = self.storage.load_test(test_id)
+        if not data:
+            return False, ["Test not found."]
+        t = TestConfig.from_dict(data["test"])
+
+        structural = [f for f in self.STRUCTURAL_FIELDS
+                      if f in changes and str(changes.get(f)) != str(getattr(t, f))]
+        if structural:
+            return False, [
+                "Question count, options, ID digits and paper size can't change "
+                "after creation (printed sheets would mismatch). Create a new "
+                "test instead."]
+
+        key_changed = False
+        for f in self.EDITABLE_FIELDS:
+            if f in changes:
+                setattr(t, f, changes[f])
+        if "answer_key" in changes and changes["answer_key"] is not None:
+            t.answer_key = {int(q): a for q, a in changes["answer_key"].items()}
+            key_changed = True
+        errs = t.validate()
+        if errs:
+            return False, errs
+
+        layout = SheetLayout.from_dict(data.get("layout", {}))
+        if not layout.questions:
+            layout = SheetLayout.build(t)
+        self.storage.save_test(t, layout)
+        if self.test and self.test.test_id == test_id:
+            self.test, self.layout = t, layout
+        # cheap and always correct: refresh the printable sheet
+        try:
+            generate_sheet_pdf(t, self.storage.test_root(t) / "sheet.pdf", layout)
+        except Exception:
+            pass
+        self.log(f"Test edited — {t.title} ({t.test_id})"
+                 + (" · answer key replaced" if key_changed else ""))
+        self.emit("tests_changed")
+        return True, []
 
     def open_test(self, test_id: str) -> bool:
         data = self.storage.load_test(test_id)

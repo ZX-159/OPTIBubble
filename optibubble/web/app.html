@@ -70,8 +70,15 @@
       </div>
 
       <div class="card">
-        <h3>Recent tests</h3>
-        <p class="sub">Click a test to make it active again.</p>
+        <div class="pagetop">
+          <h3>Your tests</h3>
+          <span class="badge info" id="testsCount">0</span>
+          <div class="spacer"></div>
+          <button class="btn sm ghost" id="newTestBtn"><i data-icon="plus"></i>New test</button>
+        </div>
+        <p class="sub">Opening a test switches Scan &amp; Serve, Review and
+               Results to its own data — every test keeps its own sheets,
+               queue and CSV.</p>
         <div id="recentTests"><div class="spin"></div></div>
       </div>
     </section>
@@ -108,8 +115,9 @@
         </div>
 
         <div class="card">
-          <h3>Answer key</h3>
-          <p class="sub">Click a cell to cycle through the options. Changes apply live.</p>
+<h3>Answer key <span class="badge info" style="vertical-align:2px">optional</span></h3>
+          <p class="sub">Click a cell to cycle options — or leave it empty and a
+             balanced key is generated automatically (editable anytime).</p>
           <div class="keytools">
             <button class="btn sm ghost" id="keyRandom">Random</button>
             <button class="btn sm ghost" id="keyClear">Clear</button>
@@ -182,6 +190,9 @@
           <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
           <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" style="text-decoration:none">Open sheet PDF — print at 100%</a>
         </div>
+        <div class="pagetop">
+          <span class="testchip" id="testChipServe"></span>
+        </div>
         <div class="card" id="keyCard" style="display:none">
           <h3>Answer key</h3>
           <p class="sub" id="keySub">—</p>
@@ -203,6 +214,9 @@
 
     <!-- ============================ REVIEW ============================ -->
     <section class="page" id="page-review">
+      <div class="pagetop">
+        <span class="testchip" id="testChipReview"></span>
+      </div>
       <div class="review">
         <div class="card">
           <h3>Flagged sheets <span class="badge warn" id="reviewCount">0</span></h3>
@@ -218,6 +232,9 @@
 
     <!-- ============================ RESULTS ============================ -->
     <section class="page" id="page-results">
+      <div class="pagetop">
+        <span class="testchip" id="testChipResults"></span>
+      </div>
       <div class="card">
         <div class="restop">
           <h3>Results</h3>

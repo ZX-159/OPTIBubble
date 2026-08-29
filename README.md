@@ -11,7 +11,7 @@ Print dynamic answer sheets → students photograph them with **any phone browse
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-425466)](#-platform-support)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-22C55E.svg)](LICENSE)
 [![Privacy](https://img.shields.io/badge/privacy-100%25%20local%2C%20no%20cloud-3B82F6)](#-privacy)
-[![Self-test](https://img.shields.io/badge/self--test-49%2F49%20green-22C55E)](#-development)
+[![Self-test](https://img.shields.io/badge/self--test-56%2F56%20green-22C55E)](#-development)
 
 *No Scantron hardware. No cloud subscription. No app store. No student data leaving the room.*
 
@@ -52,6 +52,9 @@ applied to the embedded wordmark and the header rule.
 |---|---|
 | 🖨 **Dynamic sheet generator** | 2–102 questions, 2–5 options (A–B … A–E), auto multi-column layout, up to 10-digit student-ID grid, session QR code, four machine-vision alignment anchors. A4 & US Letter. |
 | ✏️ **Sheet designer** | Editable title, custom instructions, header text size (80–140 %), wordmark side and **handwritten write-in fields** (Name/Class/Date…, ignored by the scanner) — all inside the header, with **auto-shrink instead of overlap** and a header layout that is *proven* collision-free before the PDF is written. The OPTIBubble wordmark prints in **#2e5a99** (white on dark media). |
+| 🗂 **Test management** | Every test keeps its own sheets, review queue and CSV. Open, **edit** (title/subject/key/design — the sheet PDF regenerates), **delete** with confirmation, and see which test is *active* via context chips on Serve/Review/Results. |
+| 🎲 **Auto answer key** | Leave the key empty and a complete key is generated automatically — create a test in seconds, edit the key any time, even after sheets are printed. |
+| 🔍 **Crop lightbox** | Click any flagged crop in the review queue to inspect it full-screen; close with a click or Esc. |
 | 🔑 **Print-first workflow** | Create and print sheets with a partial (or empty) answer key; finish the key later on the Scan & Serve page — grading scores whatever is already defined. |
 | 📱 **Mobile web bridge + HTTPS** | A QR link opens a premium scanner page — live viewfinder, torch, quality check, instant feedback. Two HTTPS modes: **Trusted (zero student setup)** — built-in Let's Encrypt client issues a publicly-trusted cert for your free `*.duckdns.org` domain via DNS-01, so the camera just works in any browser; or **Local CA (fully offline)** — students scan code A once. iOS & Android. |
 | 🔍 **Real OMR pipeline** | Otsu binarisation → anchor-square contour detection (on a downscaled raster for speed) → perspective warp → per-bubble dark-pixel-density analysis with a confidence model. A typical photo grades in **~80 ms** on a laptop CPU; long sessions are bounded (capped receipts, cached CSV reads, no leaked queues). |
@@ -154,7 +157,7 @@ python selftest.py
 Builds a sheet, simulates filled bubbles (pen strokes, partial marks), synthesises phone
 photos (perspective jitter, brightness gradients, sensor noise, JPEG artefacts) across
 random seeds, and asserts exact scores, flag types, student-ID reads, the full HTTP
-stack and the < 3 s latency budget — **49 checks, expect all green**.
+stack and the < 3 s latency budget — **56 checks, expect all green**.
 
 ### 3 · Launch
 
@@ -449,7 +452,7 @@ Yes — the bundled Tauri 2 shell (<code>src-tauri/</code>) wraps the same UI in
 ```
 OPTIBubble/
 ├── main.py                  # launcher (app / --serve / --demo / --selftest)
-├── selftest.py              # 49-check end-to-end verification suite
+├── selftest.py              # 56-check end-to-end verification suite
 ├── setup.md                 # setup · local builds · GitHub · Actions releases
 ├── make_assets.py           # regenerates logo/brand assets from bundled fonts
 ├── requirements.txt
@@ -497,7 +500,7 @@ page — the entire system runs from this computer and the Wi-Fi router in your 
 
 ```bash
 pip install -r requirements-dev.txt
-python selftest.py              # 49-check end-to-end suite
+python selftest.py              # 56-check end-to-end suite
 python make_assets.py           # regenerate brand assets from the bundled fonts
 python tools/otf2ttf.py         # re-convert the wordmark OTF → embeddable TTF
 python docs/shot_pipeline.py    # rebuild the pipeline figure
