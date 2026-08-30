@@ -104,12 +104,25 @@ function goto(page) {
 }
 
 /* -------------------------------------------------------------- dashboard */
+function animNum(el, val) {
+  const from = parseInt(el.textContent.replace(/\D/g, "")) || 0;
+  if (from === val || !el.animate) { el.textContent = val; return; }
+  const dur = 420, t0 = performance.now();
+  const tick = now => {
+    const k = Math.min(1, (now - t0) / dur);
+    el.textContent = Math.round(from + (val - from) * (1 - Math.pow(1 - k, 3)));
+    if (k < 1) requestAnimationFrame(tick);
+  };
+  el.animate([{opacity:.4},{opacity:1}], {duration:dur});
+  requestAnimationFrame(tick);
+}
+
 function renderDashboard() {
   const st = S.state; if (!st) return;
-  $("stReceived").textContent = st.stats.sheets_received;
-  $("stGraded").textContent = st.stats.auto_graded;
-  $("stPending").textContent = st.stats.pending_review;
-  $("stExported").textContent = st.stats.exported;
+  animNum($("stReceived"), st.stats.sheets_received);
+  animNum($("stGraded"), st.stats.auto_graded);
+  animNum($("stPending"), st.stats.pending_review);
+  animNum($("stExported"), st.stats.exported);
   setReviewBadge(st.stats.pending_review);
   const tb = $("tabReviewBadge"); if (tb) { tb.textContent = st.stats.pending_review;
     tb.classList.toggle("show", st.stats.pending_review > 0); }
@@ -378,7 +391,13 @@ function initServe() {
   };
   $("copyBtn").onclick = () => {
     const v = $("srvUrl").value;
-    if (v.startsWith("http")) { navigator.clipboard.writeText(v); toast("Link copied", "ok"); }
+    if (!v.startsWith("http")) return;
+    navigator.clipboard.writeText(v).then(() => {
+      toast("Link copied", "ok");
+      const btn = $("copyBtn");
+      btn.classList.add("copyflash");
+      setTimeout(() => btn.classList.remove("copyflash"), 400);
+    });
   };
   $("ipSel").onchange = () => renderServe();
   $("keySave").onclick = async () => {
@@ -430,8 +449,8 @@ async function loadReview() {
       <span class="badge warn">${item.flags.length} to verify</span></h3>
     <p class="sub">Pick the intended answer for each disputed item, then export.
        “Blank” records no answer (marked wrong).<br>
-       Keyboard: <b>←/→</b> move · <b>1–5</b> pick option · <b>B</b> blank ·
-       <b>Enter</b> confirm.</p>
+       Keyboard: <kbd>←</kbd><kbd>→</kbd> move · <kbd>1</kbd>–<kbd>5</kbd> pick ·
+       <kbd>B</kbd> blank · <kbd>Enter</kbd> confirm.</p>
     <div class="idrow"><span style="font-weight:700; font-size:13px">Student ID</span>
       <input type="text" id="revId" maxlength="10" value="${esc(item.student_id || "")}"></div>
     <div id="flagsBox"></div>
@@ -633,6 +652,7 @@ async function loadSettings() {
   });
   document.querySelectorAll("#page-settings input[type=text]").forEach(inp =>
     inp.onchange = () => saveOne(inp.dataset.key, inp.value));
+  renderSystemCard();
 }
 const fmt = v => (+v % 1 === 0) ? String(+v) : (+v).toFixed(2);
 async function saveOne(key, value) {
@@ -950,3 +970,51 @@ function init() {
   setInterval(() => { if (!document.hidden && S.page === "results") loadResults(); }, 4000);
 }
 document.addEventListener("DOMContentLoaded", init);
+
+
+/* ------------------------------------------------- system info card */
+async function renderSystemCard() {
+  const grid = $("sysGrid"), net = $("sysNet");
+  if (!grid) return;
+  let s;
+  try { s = await api("/api/system"); } catch { return; }
+  const tile = (label, val) =>
+    `<div class="systile"><span>${esc(label)}</span><b>${esc(val)}</b></div>`;
+  grid.innerHTML =
+    tile("App version", "v" + s.app) +
+    tile("Python", s.python) +
+    tile("Platform", s.platform) +
+    tile("OpenCV", s.opencv) +
+    tile("Tests stored", s.tests) +
+    tile("Data used", s.data_mb + " MB");
+  const https = s.server.https_domain
+    ? `${s.server.https_domain} (trusted)` :
+    s.server.https ? "local CA" : "off";
+  net.innerHTML =
+    tile("HTTP server", s.server.http ? "running :" + s.server.port
+                                       : "stopped") +
+    tile("HTTPS camera", https) +
+    tile("Sheets received", s.stats.sheets_received || 0) +
+    tile("Auto-graded", s.stats.auto_graded || 0) +
+    tile("Flagged", s.stats.flagged || 0) +
+    tile("Rejected", s.stats.rejected || 0);
+  hydrateIcons(grid); hydrateIcons(net);
+
+  const st = $("runSelftest");
+  if (st && !st.dataset.wired) {
+    st.dataset.wired = "1";
+    st.onclick = async () => {
+      const out = $("selftestOut");
+      st.classList.add("loading");
+      out.style.display = ""; out.textContent = "running the 60-check suite…";
+      try {
+        const r = await api("/api/selftest", {method: "POST"});
+        out.textContent = (r.ok ? "✔ ALL GREEN\n\n" : "✕ FAILURES\n\n") + r.tail;
+      } catch (e) {
+        out.textContent = "could not run the self-test here —\n" +
+          "run  python selftest.py  in a terminal instead";
+      }
+      st.classList.remove("loading");
+    };
+  }
+}

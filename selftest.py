@@ -293,6 +293,29 @@ def main() -> int:
 
     r = client.get("/")
     check("desktop app page served", r.status_code == 200 and b"OPTIBubble" in r.data)
+
+    # ---- UI shell integrity (a stray </div> once broke the whole layout) ----
+    from html.parser import HTMLParser as _HP
+
+    class _Chk(_HP):
+        VOID = {"img", "br", "input", "meta", "link", "hr", "embed"}
+        def __init__(self):
+            super().__init__(); self.stack = []; self.errs = []
+        def handle_starttag(self, t, a):
+            if t not in self.VOID: self.stack.append(t)
+        def handle_endtag(self, t):
+            if t in self.VOID: return
+            if not self.stack or self.stack.pop() != t: self.errs.append(t)
+    _p = _Chk(); _p.feed(r.data.decode())
+    check("app shell HTML is balanced", not _p.errs and not _p.stack,
+          str(_p.errs[:3] or _p.stack[:3]))
+    import re as _re2
+    _ids_html = set(_re2.findall(r'id="([^"]+)"', r.data.decode()))
+    _js = (Path(__file__).parent / "optibubble" / "web" / "app.js").read_text()
+    _dyn = set(_re2.findall(r'id="([A-Za-z0-9_]+)"', _js))  # ids built at runtime
+    _missing = sorted(i for i in set(_re2.findall(r'\$\("([A-Za-z0-9_]+)"\)', _js))
+                      if i not in _ids_html and i not in _dyn)
+    check("JS element ids all resolve", not _missing, str(_missing[:5]))
     r = client.get("/api/state")
     check("state snapshot", r.status_code == 200 and r.get_json()["test"] is not None)
     r = client.get("/api/settings")

@@ -19,7 +19,7 @@
     <span class="testchip" id="testChipTop"></span>
     <div class="tabs" id="tabs"></div>
     <div class="spacer"></div>
-  </div></div>
+  </div>
 
   <nav class="nav">
     <div class="navlabel">System</div>
@@ -305,9 +305,25 @@
               code A once (Android: use Firefox), and the native-camera upload
               works everywhere regardless.</p>
           </div>
+          <div class="card" style="margin-bottom:16px">
+            <h3><i data-icon="server"></i>System</h3>
+            <p class="sub">Version, environment and diagnostics.</p>
+            <div class="sysgrid" id="sysGrid">
+              <div class="systile"><span>loading…</span></div>
+            </div>
+            <div class="setgroup">Network</div>
+            <div class="sysgrid" id="sysNet"></div>
+          </div>
           <div class="card"><h3>Maintenance</h3>
             <p class="sub" id="setDataDir">data folder</p>
-            <button class="btn sm ghost" id="resetSettings">Reset to defaults</button></div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button class="btn sm ghost" id="resetSettings">Reset to defaults</button>
+              <button class="btn sm ghost" id="runSelftest"><i data-icon="check"></i>Run self-test</button>
+            </div>
+            <pre id="selftestOut" class="mono" style="display:none;margin-top:10px;
+  background:var(--bg0);border:1px solid var(--hair);border-radius:4px;
+  padding:10px;font-size:10.5px;max-height:220px;overflow:auto;white-space:pre-wrap"></pre>
+          </div>
         </div>
       </div>
     </section>
@@ -315,7 +331,7 @@
     <!-- ============================ HELP ============================ -->
     <section class="page" id="page-help">
       <div class="card" style="margin-bottom:14px">
-        <h3>ℹ️ About OPTIBubble</h3>
+        <h3><i data-icon="info"></i>About OPTIBubble</h3>
         <p class="sub">Local computer-vision OMR grading with a mobile-bridge scanner —
            v<span class="ver"></span>. Sheets are generated, photographed on any phone over
            Wi-Fi and graded with OpenCV on this machine. Nothing leaves your network.</p>

@@ -158,6 +158,74 @@ def create_app(hub: Hub) -> Flask:
     def scan(token: str):
         return send_file(_web_path("", "scan.html"))
 
+    @app.route("/api/selftest", methods=["POST"])
+    def run_selftest():
+        """Run the end-to-end suite in-process; return the tail output."""
+        import io as _io
+        import contextlib as _ctx
+        import subprocess as _sub
+        import sys as _sys
+        ok = True
+        try:
+            proc = _sub.run(
+                [_sys.executable, str(Path(__file__).resolve().parent.parent
+                                      / "selftest.py")],
+                capture_output=True, text=True, timeout=300)
+            out = proc.stdout.strip().splitlines()
+            ok = proc.returncode == 0
+            tail = "\n".join(out[-6:])
+        except Exception as e:
+            ok, tail = False, f"could not run: {e}"
+        return jsonify({"ok": ok, "tail": tail})
+
+    @app.route("/api/system")
+    def system_info():
+        """System-wide diagnostics for the Settings → System page."""
+        import platform
+        import sys as _sys
+        import cv2 as _cv
+        import numpy as _np
+        try:
+            import PIL
+            pil_v = PIL.__version__
+        except Exception:
+            pil_v = "?"
+        try:
+            import pymupdf as _pm
+            fitz_v = _pm.__doc__.split()[1] if _pm.__doc__ else "?"
+        except Exception:
+            fitz_v = "-"
+        from . import __version__ as appver
+        tests_root = hub.data_dir / "tests"
+        n_tests = len([d for d in tests_root.iterdir() if d.is_dir()]) \
+            if tests_root.exists() else 0
+        du_mb = 0.0
+        try:
+            for p in hub.data_dir.rglob("*"):
+                if p.is_file():
+                    du_mb += p.stat().st_size
+            du_mb = round(du_mb / 1048576, 1)
+        except Exception:
+            pass
+        return jsonify({
+            "app": appver, "python": _sys.version.split()[0],
+            "platform": f"{platform.system()} {platform.release()} "
+                        f"({platform.machine()})",
+            "opencv": _cv.__version__, "numpy": _np.__version__,
+            "pillow": pil_v, "pymupdf": fitz_v,
+            "flask": __import__("flask").__version__,
+            "data_dir": str(hub.data_dir), "tests": n_tests,
+            "data_mb": du_mb,
+            "server": {"http": hub.server_running,
+                       "https": hub.https_running,
+                       "port": hub.settings.port,
+                       "https_port": hub.settings.https_port,
+                       "https_mode": hub.settings.https_mode,
+                       "https_domain": hub._https_host},
+            "stats": hub.stats,
+            "lan_ips": hub.lan_ips(),
+        })
+
     @app.route("/health")
     def health():
         return jsonify({"ok": True, "app": "OPTIBubble", "version":

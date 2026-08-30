@@ -11,7 +11,7 @@ Print dynamic answer sheets → students photograph them with **any phone browse
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-425466)](#-platform-support)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-22C55E.svg)](LICENSE)
 [![Privacy](https://img.shields.io/badge/privacy-100%25%20local%2C%20no%20cloud-3B82F6)](#-privacy)
-[![Self-test](https://img.shields.io/badge/self--test-58%2F58%20green-22C55E)](#-development)
+[![Self-test](https://img.shields.io/badge/self--test-60%2F60%20green-22C55E)](#-development)
 
 *No Scantron hardware. No cloud subscription. No app store. No student data leaving the room.*
 
@@ -51,6 +51,7 @@ applied to the embedded wordmark and the header rule.
 | | |
 |---|---|
 | 🖨 **Dynamic sheet generator** | 2–102 questions, 2–5 options (A–B … A–E), auto multi-column layout, up to 10-digit student-ID grid, session QR code, four machine-vision alignment anchors. A4 & US Letter. |
+| 📊 **System info & in-app self-test** | Settings → System shows version, Python/OpenCV/platform, storage used, network + HTTPS status and lifetime counters — plus a button that runs the full 60-check suite and prints the verdict in-app. |
 | 🔑 **Answer key printing** | A one-page teacher key PDF — grid of Q#→letter plus a compact string — generated with every test and **auto-refreshed when the key changes**. One button next to the sheet PDF on Scan & Serve. |
 | ✏️ **Sheet designer** | Editable title, custom instructions, header text size (80–140 %), wordmark side and **handwritten write-in fields** (Name/Class/Date…, ignored by the scanner) — all inside the header, with **auto-shrink instead of overlap** and a header layout that is *proven* collision-free before the PDF is written. The OPTIBubble wordmark prints in **#2e5a99** (white on dark media). |
 | 🗂 **Test management** | Every test keeps its own sheets, review queue and CSV. Open, **edit** (title/subject/key/design — the sheet PDF regenerates), **delete** with confirmation, and see which test is *active* via context chips on Serve/Review/Results. |
@@ -158,7 +159,7 @@ python selftest.py
 Builds a sheet, simulates filled bubbles (pen strokes, partial marks), synthesises phone
 photos (perspective jitter, brightness gradients, sensor noise, JPEG artefacts) across
 random seeds, and asserts exact scores, flag types, student-ID reads, the full HTTP
-stack and the < 3 s latency budget — **58 checks, expect all green**.
+stack and the < 3 s latency budget — **60 checks, expect all green**.
 
 ### 3 · Launch
 
@@ -453,7 +454,7 @@ Yes — the bundled Tauri 2 shell (<code>src-tauri/</code>) wraps the same UI in
 ```
 OPTIBubble/
 ├── main.py                  # launcher (app / --serve / --demo / --selftest)
-├── selftest.py              # 58-check end-to-end verification suite
+├── selftest.py              # 60-check end-to-end verification suite
 ├── setup.md                 # setup · local builds · GitHub · Actions releases
 ├── make_assets.py           # regenerates logo/brand assets from bundled fonts
 ├── requirements.txt
@@ -501,7 +502,7 @@ page — the entire system runs from this computer and the Wi-Fi router in your 
 
 ```bash
 pip install -r requirements-dev.txt
-python selftest.py              # 58-check end-to-end suite
+python selftest.py              # 60-check end-to-end suite
 python make_assets.py           # regenerate brand assets from the bundled fonts
 python tools/otf2ttf.py         # re-convert the wordmark OTF → embeddable TTF
 python docs/shot_pipeline.py    # rebuild the pipeline figure
