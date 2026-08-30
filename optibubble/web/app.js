@@ -142,7 +142,7 @@ function renderDashboard() {
     b.onclick = async () => {
       await api("/api/tests/" + b.dataset.open + "/open", {method: "POST"});
       toast("Test opened — serve, review and results now show it", "ok");
-      refresh(true); goto("serve");
+      refresh(true); reloadTests(); goto("serve");
     });
   $("recentTests").querySelectorAll("[data-edit]").forEach(b =>
     b.onclick = () => openEditDialog(b.dataset.edit));
@@ -650,6 +650,13 @@ function lightbox(src, caption) {
   document.body.appendChild(lb);
 }
 
+async function reloadTests() {
+  try {
+    S.tests = await api("/api/tests");
+  } catch { /* keep the old list */ }
+  if (S.page === "dashboard") renderDashboard();
+}
+
 async function confirmDelete(testId) {
   const t = (S.tests || []).find(x => x.test_id === testId) || {};
   const ov = modal(`
@@ -663,13 +670,19 @@ async function confirmDelete(testId) {
     </div>`);
   ov.querySelector("[data-x=cancel]").onclick = () => ov.remove();
   ov.querySelector("[data-x=yes]").onclick = async () => {
-    ov.querySelector("[data-x=yes]").classList.add("loading");
+    const btn = ov.querySelector("[data-x=yes]");
+    btn.classList.add("loading"); btn.disabled = true;
+    const wasActive = S.state && S.state.test &&
+                      S.state.test.test_id === testId;
     try {
       await api(`/api/tests/${testId}/delete`, {method: "POST"});
-      ov.remove(); toast("Test deleted", "ok"); refresh(true); renderDashboard();
-    } catch (e) {
-      toast((e.data && e.data.message) || "could not delete", "err");
       ov.remove();
+      toast(wasActive ? "Test deleted — no active test now" : "Test deleted", "ok");
+      await refresh(true);          // clears chips/serve state if it was active
+      await reloadTests();          // refetch BEFORE re-rendering rows
+    } catch (e) {
+      toast((e.data && (e.data.message || e.data.error)) || "could not delete", "err");
+      ov.remove(); reloadTests();
     }
   };
 }
@@ -720,7 +733,7 @@ async function openEditDialog(testId) {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(body)});
       if (r.ok) { ov.remove(); toast("Test updated — sheet PDF refreshed", "ok");
-        refresh(true); renderDashboard(); renderServe(); }
+        refresh(true); reloadTests(); renderServe(); }
       else throw r;
     } catch (e) {
       const errs = (e.data && e.data.errors) || ["Could not save."];

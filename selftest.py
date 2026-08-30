@@ -580,6 +580,25 @@ def main() -> int:
     r = client.get(f"/api/tests/{auto_id}")
     check("deleted test is gone", r.status_code == 404)
 
+    # deleting the ACTIVE test must never kill the app server (regression:
+    # this used to stop the HTTP server the desktop UI is served from)
+    r = client.post("/api/tests", content_type="application/json", json={
+        "title": "ActiveDelete", "num_questions": 5})
+    act_id = r.get_json()["test_id"]
+    hub.open_test(act_id)
+    hub.start_server()
+    r = client.post(f"/api/tests/{act_id}/delete")
+    ok_del = r.status_code == 200
+    time.sleep(0.3)
+    r2 = client.get("/api/state")            # server must still respond
+    import urllib.request as _u2
+    live = _u2.urlopen(f"http://127.0.0.1:{hub.settings.port}/health",
+                      timeout=5).status
+    check("deleting the ACTIVE test keeps the app server alive",
+          ok_del and r2.status_code == 200 and live == 200
+          and hub.test is None,
+          f"http={live}, state={r2.status_code}")
+
     print()
     bad = [n for n, ok, _ in results if not ok]
     print(f"{len(results) - len(bad)}/{len(results)} checks passed")

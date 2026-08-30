@@ -482,7 +482,7 @@ input,select,textarea{transition:outline-color var(--dur-fast)}
 .main{overflow-x:hidden}
 .card{min-width:0}
 table.tbl table,.tbl{table-layout:auto}
-.tbl td,.tbl th{overflow-wrap:anywhere}
+.tbl td,.tbl th{overflow-wrap:break-word;word-break:normal}
 .log{overflow-wrap:anywhere}
 input[type=text],input[type=number],textarea,select{min-width:0}
 .urlrow input{overflow-wrap:anywhere}
@@ -500,3 +500,24 @@ input[type=text],input[type=number],textarea,select{min-width:0}
   .flagcard img{max-height:220px;width:auto;max-width:100%}}
 .kcell button{min-width:0}
 .previewbox embed{max-width:100%}
+
+/* ============ final responsive layer (must stay last) ==================== */
+@media (max-width:1250px){
+  .setup3{grid-template-columns:minmax(0,320px) minmax(0,1fr)}
+  .setup3>div:last-child{grid-column:1 / -1}
+}
+@media (max-width:1060px){
+  .hero,.setup,.setup3,.serve,.review,.flagcard{grid-template-columns:minmax(0,1fr)}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hero .art{padding:18px 18px 16px}
+  .hero h1{font-size:17px}
+  .hero p{font-size:12px}
+  .steps{grid-template-columns:1fr}
+  .flagcard img{max-height:220px;width:auto;max-width:100%;margin:0 auto}
+  .qrgrid{grid-template-columns:1fr}
+  .testchip b{max-width:170px}
+  .pagetop{gap:8px}
+}
+@media (min-width:1061px){
+  .setup3>div:last-child{grid-column:auto}   /* undo the 1250 span when wide */
+}

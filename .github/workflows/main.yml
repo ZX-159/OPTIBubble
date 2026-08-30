@@ -25,7 +25,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (56 checks)
+    name: Self-test (57 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -192,8 +192,10 @@ class Hub:
         if not root.exists():
             return False, "No such test."
         if self.test and self.test.test_id == test_id:
-            self.stop_server()
+            # NB: never stop the HTTP server here — the desktop app UI itself
+            # is served from it. Just drop the active-test context.
             self.test, self.layout = None, None
+            self._preview_cache = ()
             self.emit("test_closed")
         try:
             shutil.rmtree(root)
