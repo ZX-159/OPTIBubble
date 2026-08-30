@@ -346,6 +346,22 @@ def main() -> int:
     check("flagged sheet queued for review",
           len(client.get("/api/review").get_json()) == 1)
 
+    # review crops served path-free (robust across OSes / moved data)
+    rv = client.get("/api/review").get_json()
+    crop_url = next((f["crop"] for it in rv for f in it["flags"] if f.get("crop")), "")
+    check("review listing uses path-free crop URLs",
+          crop_url.startswith("/api/reviewimg/") and "/api/crop?p=" not in crop_url,
+          crop_url[:44])
+    if crop_url:
+        ri = client.get(crop_url)
+        check("evidence crop served by sheet+name", ri.status_code == 200
+              and ri.headers.get("Content-Type") == "image/png"
+              and ri.data[:4] == b"\x89PNG")
+        sid = crop_url.split("/")[3]
+        check("crop endpoint rejects traversal/unknown",
+              client.get(f"/api/reviewimg/{sid}/..%2Fkey").status_code == 404
+              and client.get(f"/api/reviewimg/{sid}/q99").status_code == 404)
+
     reviews = client.get("/api/review").get_json()
     crop_url = next((f["crop"] for f in reviews[0]["flags"] if f["crop"]), "")
     if crop_url:

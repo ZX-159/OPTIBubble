@@ -360,8 +360,7 @@ def create_app(hub: Hub) -> Flask:
                 "flags": [
                     {"kind": f.get("kind"), "q": f.get("q"), "digit": f.get("digit"),
                      "guess": f.get("guess"), "message": f.get("message", ""),
-                     "crop": (f"/api/crop?p=" + quote(str(f.get("crop", "")))
-                              if f.get("crop") else "")}
+                     "crop": _review_img_url(r.get("sheet_id"), f.get("crop"))}
                     for f in r.get("flags", [])],
             })
         return jsonify(out)
@@ -413,6 +412,22 @@ def create_app(hub: Hub) -> Flask:
         return Response(buf.getvalue(), mimetype="text/csv",
                         headers={"Content-Disposition":
                                  f"attachment; filename={hub.test.test_id}_results.csv"})
+
+    @app.route("/api/reviewimg/<sheet_id>/<name>")
+    def reviewimg(sheet_id: str, name: str):
+        """Serve a review evidence crop by sheet + name — no filesystem paths
+        in URLs (robust across OSes and relocated data folders)."""
+        import re as _re
+        if not hub.test:
+            abort(404)
+        if not _re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", sheet_id) or \
+           not _re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", name):
+            abort(404)
+        base = (hub.storage.test_root(hub.test) / "review" / "crops").resolve()
+        p = (base / sheet_id / f"{name}.png").resolve()
+        if not str(p).startswith(str(base)) or not p.exists():
+            abort(404)
+        return send_file(p, mimetype="image/png")
 
     @app.route("/api/crop")
     def crop():
@@ -523,3 +538,11 @@ def x509_days_left(path) -> int:
         return (c.not_valid_after_utc - _dt.datetime.now(_dt.timezone.utc)).days
     except Exception:
         return -1
+
+
+def _review_img_url(sheet_id, crop_path) -> str:
+    """Build the path-free crop URL from the stored filename."""
+    if not crop_path or not sheet_id:
+        return ""
+    name = str(crop_path).replace("\\", "/").split("/")[-1].removesuffix(".png")
+    return f"/api/reviewimg/{sheet_id}/{name}"

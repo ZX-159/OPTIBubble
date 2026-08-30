@@ -44,7 +44,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 60/60 checks passed · ALL GREEN
+python selftest.py                 # expect: 63/63 checks passed · ALL GREEN
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -314,7 +314,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (60 checks)
+    name: Self-test (63 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -75,7 +75,8 @@ button{font-family:inherit}
 :focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:0}
 
 /* ---------------------------------------------------------------- layout */
-.app{display:grid;grid-template-columns:218px 1fr;grid-template-rows:48px 1fr;
+.app{display:grid;grid-template-columns:minmax(0,218px) minmax(0,1fr);
+  grid-template-rows:48px 1fr;
   grid-template-areas:"brand topbar" "nav main";height:100vh}
 .brand{grid-area:brand;display:flex;align-items:center;gap:10px;padding:0 16px;
   background:var(--bg1);position:relative}
@@ -92,7 +93,10 @@ button{font-family:inherit}
 .topbar::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
   background:linear-gradient(90deg,transparent,var(--hair2) 12%,var(--hair2) 88%,transparent)}
 .nav{grid-area:nav;background:var(--bg1);padding:14px 10px;display:flex;
-  flex-direction:column;gap:2px;overflow-y:auto;position:relative}
+  flex-direction:column;gap:2px;overflow:hidden auto;position:relative;
+  min-width:0}
+.nav .foot{min-width:0;max-width:100%}
+.nav .footrow{flex-wrap:wrap}
 .nav::after{content:'';position:absolute;top:0;bottom:0;right:0;width:1px;
   background:linear-gradient(180deg,transparent,var(--hair2) 20%,var(--hair2) 80%,transparent)}
 .main{grid-area:main;overflow-y:auto;padding:22px 26px 48px}
@@ -112,7 +116,8 @@ button{font-family:inherit}
 .tab .badge.show{display:inline-block}
 .spacer{flex:1}
 .pill{font-size:10.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
-  padding:4px 10px;border-radius:999px;white-space:nowrap}
+  padding:4px 10px;border-radius:999px;white-space:nowrap;max-width:100%;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;display:block}
 .pill.ok{background:var(--ok-dim);color:var(--ok)}
 .pill.off{background:var(--bg3);color:var(--tx3)}
 .iconbtn{width:30px;height:30px;border-radius:4px;border:0;background:var(--bg3);

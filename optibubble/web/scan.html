@@ -48,6 +48,18 @@ h1{font-size:15px;font-weight:800;margin:6px 0 3px;text-align:center}
   background:var(--bg1);aspect-ratio:3/4;max-height:62dvh}
 .stage video,.stage img#preview{width:100%;height:100%;object-fit:cover;display:block}
 #overlay{position:absolute;inset:0;pointer-events:none}
+#edgeCanvas{position:absolute;inset:0;width:100%;height:100%}
+.alignstate{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  display:none;align-items:center;gap:7px;font-size:10.5px;font-weight:800;
+  letter-spacing:.1em;text-transform:uppercase;padding:5px 12px;border-radius:999px}
+.alignstate.hunt{display:flex;background:rgba(12,13,17,.72);color:var(--tx2)}
+.alignstate.ok{display:flex;background:rgba(63,191,124,.92);color:#08130C}
+.alignstate .dot{width:7px;height:7px;border-radius:99px;background:currentColor;
+  animation:softPulse 1.2s infinite}
+@keyframes softPulse{0%,100%{opacity:1}50%{opacity:.4}}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+.flash.go{animation:flashy .32s ease}
+@keyframes flashy{0%{opacity:.85}100%{opacity:0}}
 .guide{position:absolute;inset:6% 4%;border-radius:4px}
 .guide .c{position:absolute;width:30px;height:30px;border:3px solid var(--brand);
   opacity:.95}
@@ -132,6 +144,10 @@ input[type=file]{display:none}
       <button class="btn" id="startBtn"><span data-mico="camera" data-size="16"></span>&nbsp;Start camera</button>
       <button class="btn ghost" id="fileBtnAlt"><span data-mico="image" data-size="16"></span>&nbsp;Upload photo</button>
     </div>
+    <label style="display:flex;gap:9px;align-items:center;justify-content:center;
+      margin-top:14px;font-size:12.5px;color:var(--tx2);cursor:pointer">
+      <input type="checkbox" id="autoCap" style="width:15px;height:15px;accent-color:#FF5A2D">
+      Auto-capture when the sheet is aligned</label>
     <input type="file" id="fileInput" accept="image/*" capture="environment">
   </section>
 
@@ -139,10 +155,14 @@ input[type=file]{display:none}
   <section id="cameraView" class="hidden" style="width:100%">
     <div class="stage">
       <video id="video" autoplay playsinline muted></video>
-      <div id="overlay"><div class="guide">
-        <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
-      </div>
-      <div class="hint" id="hint">Fill the frame — all 4 black corner squares must be visible</div>
+      <div class="flash" id="flash"></div>
+      <div id="overlay">
+        <canvas id="edgeCanvas"></canvas>
+        <div class="guide" id="staticGuide">
+          <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+        </div>
+        <div class="hint" id="hint">Fill the frame — all 4 black corner squares must be visible</div>
+        <div class="alignstate" id="alignState"></div>
       </div>
     </div>
     <div class="controls">
@@ -227,6 +247,8 @@ async function startCamera(){
       width:{ideal:CFG.width},height:{ideal:Math.round(CFG.width*0.75)}},audio:false});
     track=stream.getVideoTracks()[0];
     $("video").srcObject=stream; show("cameraView");
+    $("staticGuide").style.display="none";   // dynamic overlay takes over
+    EDGE.run=true;EDGE.stable=0;EDGE.boxes=[];clearTimeout(EDGE.timer);edgeTick();
   }catch(e){
     // no getUserMedia over plain http / denied → native camera app fallback
     $("fileInput").removeAttribute("capture");
@@ -258,14 +280,118 @@ function handleFile(file){
   img.src=URL.createObjectURL(file);
 }
 
-$("shutterBtn").onclick=()=>{
+/* ================= live edge-detection overlay ====================
+   Runs a lightweight Sobel detector on a downscaled video frame,
+   estimates the sheet's bounding quad from strong-edge density and
+   draws corner brackets over the viewfinder. When the quad is stable
+   and page-shaped the state chip turns green (and auto-capture can
+   fire). All local, ~4 ms per frame at 160 px width.
+   ================================================================ */
+const EDGE={proc:document.createElement("canvas"),run:false,timer:null,
+  boxes:[],stable:0,lastCap:0,iv:120};
+EDGE.proc.width=160;
+function edgeTick(){
+  if(!EDGE.run){return;}
+  const v=$("video");
+  if(v.videoWidth>0){try{edgeDetect(v);}catch(e){/* keep the camera usable */}}
+  EDGE.timer=setTimeout(edgeTick,EDGE.iv);
+}
+function edgeDetect(v){
+  const W=160,H=Math.max(1,Math.round(W*v.videoHeight/v.videoWidth));
+  const pc=EDGE.proc; if(pc.height!==H){pc.height=H;}
+  const g=pc.getContext("2d",{willReadFrequently:true});
+  g.drawImage(v,0,0,W,H);
+  const d=g.getImageData(0,0,W,H).data;
+  const lum=new Float32Array(W*H);
+  for(let i=0,j=0;i<d.length;i+=4,j++)lum[j]=.299*d[i]+.587*d[i+1]+.114*d[i+2];
+  // sobel magnitude
+  const mag=new Float32Array(W*H);
+  let sum=0,sq=0,n=0;
+  for(let y=1;y<H-1;y++){
+    for(let x=1;x<W-1;x++){
+      const i=y*W+x;
+      const gx=-lum[i-W-1]-2*lum[i-1]-lum[i+W-1]+lum[i-W+1]+2*lum[i+1]+lum[i+W+1];
+      const gy=-lum[i-W-1]-2*lum[i-W]-lum[i-W+1]+lum[i+W-1]+2*lum[i+W]+lum[i+W+1];
+      const m=Math.hypot(gx,gy); mag[i]=m; sum+=m; sq+=m*m; n++;
+    }
+  }
+  const mean=sum/Math.max(1,n);
+  const th=Math.max(60,mean+1.6*Math.sqrt(Math.max(0,sq/n-mean*mean)));
+  // collect strong-edge coordinates (2nd..98th pct → ignore specks)
+  const xs=[],ys=[];
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+    if(mag[y*W+x]>th){xs.push(x);ys.push(y);}
+  }
+  const cv=$("edgeCanvas");
+  const cw=cv.clientWidth||1,ch=cv.clientHeight||1;
+  if(cv.width!==cw||cv.height!==ch){cv.width=cw;cv.height=ch;}
+  const c2=cv.getContext("2d");
+  c2.clearRect(0,0,cw,ch);
+  if(xs.length<40){setAlign("hunt","searching for the sheet…");EDGE.stable=0;return;}
+  xs.sort((a,b)=>a-b);ys.sort((a,b)=>a-b);
+  const q=(a,p)=>a[Math.floor(p*(a.length-1))];
+  const x0=q(xs,.02),x1=q(xs,.98),y0=q(ys,.02),y1=q(ys,.98);
+  const box={x0,y0,x1,y1,w:x1-x0,h:y1-y0};
+  // stability: size/centre jitter over the last frames
+  EDGE.boxes.push(box);if(EDGE.boxes.length>6)EDGE.boxes.shift();
+  const sx=EDGE.boxes.map(b=>b.w),sy=EDGE.boxes.map(b=>b.h);
+  const jx=Math.max(...sx)-Math.min(...sx),jy=Math.max(...sy)-Math.min(...sy);
+  const aspect=box.w/Math.max(1,box.h);
+  const cover=(box.w*box.h)/(W*H);
+  const aligned=EDGE.boxes.length>=4&&jx<10&&jy<10&&cover>0.30&&
+                aspect>0.45&&aspect<1.05;
+  const col=aligned?"#3FBF7C":"#60A5FA";
+  const kx=cw/W,ky=ch/H,pad=8;
+  c2.lineWidth=2.5;c2.strokeStyle=col;
+  c2.beginPath();
+  c2.moveTo(box.x0*kx-pad,box.y0*ky-pad);c2.lineTo(box.x1*kx+pad,box.y0*ky-pad);
+  c2.lineTo(box.x1*kx+pad,box.y1*ky+pad);c2.lineTo(box.x0*kx-pad,box.y1*ky+pad);
+  c2.closePath();c2.stroke();
+  const L=22;
+  [[box.x0*kx-pad,box.y0*ky-pad,1,1],[box.x1*kx+pad,box.y0*ky-pad,-1,1],
+   [box.x0*kx-pad,box.y1*ky+pad,1,-1],[box.x1*kx+pad,box.y1*ky+pad,-1,-1]]
+  .forEach(([cx,cy,dx,dy])=>{
+    c2.beginPath();c2.lineWidth=4;c2.strokeStyle=col;
+    c2.moveTo(cx,cy);c2.lineTo(cx+dx*L,cy);
+    c2.moveTo(cx,cy);c2.lineTo(cx,cy+dy*L);c2.stroke();
+  });
+  if(aligned){
+    EDGE.stable++;setAlign("ok","aligned — hold steady");
+    if($("autoCap").checked&&EDGE.stable>=6&&Date.now()-EDGE.lastCap>4000){
+      EDGE.lastCap=Date.now();EDGE.stable=0;
+      $("flash").classList.add("go");
+      setTimeout(()=>$("flash").classList.remove("go"),340);
+      snapPhoto();
+    }
+  }else{EDGE.stable=0;setAlign("hunt","align the sheet in the frame");}
+}
+function setAlign(mode,txt){
+  const el=$("alignState");
+  el.className="alignstate "+mode;
+  el.innerHTML=mode==="ok"?'<span class="dot"></span>'+txt:txt;
+}
+function snapPhoto(){
   const v=$("video");
   const c=document.createElement("canvas");
   const scale=Math.min(1,CFG.width/Math.max(v.videoWidth,v.videoHeight));
   c.width=Math.round(v.videoWidth*scale);c.height=Math.round(v.videoHeight*scale);
   c.getContext("2d").drawImage(v,0,0,c.width,c.height);
   c.toBlob(b=>{if(b){capturedBlob=b;confirmStage();}},"image/jpeg",CFG.quality);
-};
+}
+$("shutterBtn").onclick=()=>{snapPhoto();};
+// pause the detector whenever we leave the live view
+for(const id of["retakeBtn","nextBtn"]){
+  const el=$(id);
+  if(el){const old=el.onclick;el.onclick=()=>{EDGE.run=false;
+    clearTimeout(EDGE.timer);setAlign("", "");$("alignState").className="alignstate";
+    if(old)old();};}
+}
+// remember the auto-capture preference
+try{
+  const ac=document.getElementById("autoCap");
+  ac.checked=localStorage.getItem("ob_autocap")==="1";
+  ac.onchange=()=>localStorage.setItem("ob_autocap",ac.checked?"1":"0");
+}catch(e){}
 
 /* ---------- client-side quick check ---------- */
 function quickCheck(blob,cb){

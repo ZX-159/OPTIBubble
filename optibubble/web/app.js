@@ -468,7 +468,8 @@ async function loadReview() {
     card.tabIndex = -1;
     card.innerHTML = `
       ${f.crop ? `<div class="evidence"><img src="${esc(f.crop)}" alt="crop"
-          data-crop="${esc(f.crop)}" data-cap="${esc(f.message || '')}" style="cursor:zoom-in">
+          data-crop="${esc(f.crop)}" data-cap="${esc(f.message || '')}" style="cursor:zoom-in"
+          onerror="this.closest('.evidence').innerHTML='<span style=&quot;color:#8A97AC;font-size:11.5px;padding:26px 0;display:block&quot;>preview unavailable</span>'">
           <div class="cap">${icon("eye", 11)}evidence · click to enlarge</div></div>` :
         `<div class="evidence"><div class="muted" style="font-size:12px;padding:22px 0">no preview</div></div>`}
       <div>
@@ -553,16 +554,18 @@ function renderResults() {
   $("resStat").textContent =
     `${shown.length} sheets · avg ${(avg).toFixed(1)} · high ${Math.max(...scores)} · low ${Math.min(...scores)}`;
   renderHisto(scores, shown[0] ? +shown[0].Max_Score || 0 : 0);
-  body.innerHTML = shown.slice().reverse().map((r, i) => `<tr>
+  body.innerHTML = shown.slice().reverse().map((r, i) => `<tr data-row="${shown.length - 1 - i}" style="cursor:pointer">
     <td class="muted">${i + 1}</td>
     <td class="mono">${esc((r.Timestamp || "").slice(11, 19))}</td>
     <td><b>${esc(r.Student_ID || "—")}</b></td>
     <td><b>${r.Total_Score}</b><span class="muted">/${r.Max_Score}</span></td>
     <td>${r.Percent ?? "—"}</td>
     <td>${r.confidence != null ? `<div class="confbar"><i style="width:${Math.round(r.confidence * 100)}%"></i></div>` : "—"}</td>
-    <td>${r.Status === "Verified" ? '<span class="badge ok">✔ verified</span>' :
-        '<span class="badge warn">⚑ flagged</span>'}</td>
+    <td>${r.Status === "Verified" ? '<span class="badge ok">verified</span>' :
+        '<span class="badge warn">flagged</span>'}</td>
   </tr>`).join("");
+  body.querySelectorAll("tr[data-row]").forEach(tr =>
+    tr.onclick = () => openResultDetail(shown[+tr.dataset.row]));
 }
 
 function renderHisto(scores, max) {
@@ -1017,4 +1020,40 @@ async function renderSystemCard() {
       st.classList.remove("loading");
     };
   }
+}
+
+
+/* ------------------------------------------------- result detail modal */
+function openResultDetail(r) {
+  let detail = {};
+  try { detail = JSON.parse(r.Detailed_Answers_JSON || "{}"); } catch {}
+  const answers = detail.answers || {};
+  const correct = detail.correct || {};
+  const qs = Object.keys(answers).map(Number).sort((a, b) => a - b);
+  const chips = qs.map(q => {
+    const a = answers[q], ok = correct[q];
+    const col = ok ? "var(--ok-dim);color:var(--ok)" :
+      a ? "var(--err-dim);color:var(--err)" : "var(--bg3);color:var(--tx3)";
+    return `<span style="background:${col};border-radius:4px;padding:3px 7px;
+      font-size:11px;font-weight:800;font-variant-numeric:tabular-nums">${q}
+      <span style="opacity:.55">|</span> ${a || "\u2014"}</span>`;
+  }).join(" ");
+  const conf = detail.confidence != null
+    ? Math.round(detail.confidence * 100) + "%" : "\u2014";
+  const ov = modal(`
+    <h3>${icon("file", 15)} ${esc(r.Student_ID || "(no ID)")}</h3>
+    <p class="sub">${esc(r.Timestamp || "")} · ${esc(r.Test_Title || "")}</p>
+    <div class="sysgrid" style="margin-bottom:12px">
+      <div class="systile"><span>Score</span><b>${r.Total_Score}/${r.Max_Score}</b></div>
+      <div class="systile"><span>Percent</span><b>${r.Percent ?? "\u2014"}%</b></div>
+      <div class="systile"><span>Confidence</span><b>${conf}</b></div>
+      <div class="systile"><span>Status</span><b>${esc(r.Status || "")}</b></div>
+    </div>
+    <div class="setgroup">Per-question answers</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">${chips ||
+      '<span class="muted">no detail stored</span>'}</div>
+    <div class="modal-actions">
+      <button class="btn ghost" data-x="close">Close</button>
+    </div>`);
+  ov.querySelector("[data-x=close]").onclick = e => ov.remove();
 }
