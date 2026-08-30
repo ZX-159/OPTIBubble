@@ -6,10 +6,10 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-const PAGES = [
-  ["dashboard", "home"], ["setup", "pencil"], ["serve", "scan"],
-  ["review", "queue"], ["results", "table"], ["settings", "settings"],
-  ["help", "help"],
+const SYS_PAGES = ["dashboard", "settings", "help"];
+const TEST_PAGES = [
+  ["setup", "pencil", "New Test"], ["serve", "scan", "Scan & Serve"],
+  ["review", "queue", "Review"], ["results", "table", "Results"],
 ];
 const FAQ = [
   ["How do students scan their sheets?",
@@ -70,19 +70,27 @@ async function api(path, opts = {}) {
 
 /* ------------------------------------------------------------- navigation */
 function buildTabs() {
-  $("tabs").innerHTML = PAGES.map(([id, ic]) =>
-    `<button class="tab" data-page="${id}">${icon(ic, 14)}<span>${labelOf(id)}</span>
+  $("tabs").innerHTML = TEST_PAGES.map(([id, ic, label]) =>
+    `<button class="tab" data-page="${id}">${icon(ic, 14)}<span>${label}</span>
      ${id === "review" ? '<span class="badge" id="tabReviewBadge">0</span>' : ""}</button>`
   ).join("");
 }
 const LABELS = {dashboard:"Dashboard", setup:"New Test", serve:"Scan & Serve",
   review:"Review", results:"Results", settings:"Settings", help:"Help"};
 const labelOf = id => LABELS[id] || id;
+function setReviewBadge(n) {
+  document.querySelectorAll("#tabReviewBadge").forEach(b => {
+    b.textContent = n;
+    b.classList.toggle("show", n > 0);
+  });
+}
 
 function goto(page) {
   S.page = page;
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   $("page-" + page).classList.add("active");
+  const sys = SYS_PAGES.includes(page);
+  document.querySelector(".app").classList.toggle("sysmode", sys);
   document.querySelectorAll(".nav a.item").forEach(a =>
     a.classList.toggle("active", a.dataset.page === page));
   document.querySelectorAll(".tab").forEach(t =>
@@ -102,8 +110,7 @@ function renderDashboard() {
   $("stGraded").textContent = st.stats.auto_graded;
   $("stPending").textContent = st.stats.pending_review;
   $("stExported").textContent = st.stats.exported;
-  $("navReviewBadge").textContent = st.stats.pending_review;
-  $("navReviewBadge").classList.toggle("show", st.stats.pending_review > 0);
+  setReviewBadge(st.stats.pending_review);
   const tb = $("tabReviewBadge"); if (tb) { tb.textContent = st.stats.pending_review;
     tb.classList.toggle("show", st.stats.pending_review > 0); }
 
@@ -247,7 +254,9 @@ function initSetup() {
         toast(`Key incomplete — ${r.missing_key} undefined. Finish it on Scan & Serve.`);
       (r.warnings || []).forEach(w => toast("ℹ " + w));
       $("previewBox").style.display = "";
-      $("previewPdf").src = "/api/sheet.pdf?" + Date.now();
+      const pv = $("previewImg");
+      pv.src = "/api/preview.png?" + Date.now();
+      pv.onclick = () => lightbox(pv.src, "Generated answer sheet");
       refresh(true); goto("serve");
     } catch (e) {
       const errs = (e.data && e.data.errors) || ["Could not create the test."];
@@ -439,8 +448,10 @@ async function loadReview() {
     card.dataset.flag = i;
     card.tabIndex = -1;
     card.innerHTML = `
-      ${f.crop ? `<img src="${esc(f.crop)}" alt="crop" data-crop="${esc(f.crop)}" data-cap="${esc(f.message || '')}" style="cursor:zoom-in">` :
-        `<div class="muted" style="font-size:12px">no preview</div>`}
+      ${f.crop ? `<div class="evidence"><img src="${esc(f.crop)}" alt="crop"
+          data-crop="${esc(f.crop)}" data-cap="${esc(f.message || '')}" style="cursor:zoom-in">
+          <div class="cap">${icon("eye", 11)}evidence · click to enlarge</div></div>` :
+        `<div class="evidence"><div class="muted" style="font-size:12px;padding:22px 0">no preview</div></div>`}
       <div>
         <b style="color:var(--warn2); font-size:13.5px">${esc(kindLabel(f.kind))}</b>
         <div class="muted" style="font-size:12.5px; margin:3px 0">${esc(f.message)}</div>
@@ -746,23 +757,18 @@ async function openEditDialog(testId) {
 
 /* ------------------------------------------------- per-test chips */
 function renderTestChips(st) {
+  const el = $("testChipTop"); if (!el) return;
   const t = st.test;
-  const chips = [["testChipServe", "serve"], ["testChipReview", "review"],
-                 ["testChipResults", "results"]];
-  chips.forEach(([id]) => {
-    const el = $(id); if (!el) return;
-    if (!t) {
-      el.innerHTML = `<i data-icon="info" data-size="13"></i>No active test —
-        <a href="#" data-goto="dashboard">pick one</a>`;
-    } else {
-      el.innerHTML = icon("file", 13) +
-        `<span>Working on</span><b title="${esc(t.title)}">${esc(t.title)}</b>
-         <span class="mono">${esc(t.test_id)}</span>
-         <a href="#" data-goto="dashboard">switch</a>`;
-    }
-    hydrateIcons(el);
-  });
-  document.querySelectorAll(".testchip a[data-goto]").forEach(a =>
+  if (!t) {
+    el.innerHTML = icon("alert", 13) +
+      `<span>no active test</span><a href="#" data-goto="setup">New test</a>`;
+  } else {
+    el.innerHTML = icon("file", 13) +
+      `<span>working on</span><b title="${esc(t.title)}">${esc(t.title)}</b>
+       <span class="mono">${esc(t.test_id)}</span>
+       <a href="#" data-goto="dashboard">switch</a>`;
+  }
+  el.querySelectorAll("a[data-goto]").forEach(a =>
     a.onclick = e => { e.preventDefault(); goto(a.dataset.goto); });
 }
 
@@ -907,8 +913,7 @@ async function refresh(force = false) {
     if (S.page === "dashboard") renderDashboard(); }).catch(() => {});
     if (S.page === "serve") { renderServe(); if (logGrew || force) renderLog(st); }
     if (S.page === "review") {
-      $("navReviewBadge").textContent = st.stats.pending_review;
-      $("navReviewBadge").classList.toggle("show", st.stats.pending_review > 0);
+      setReviewBadge(st.stats.pending_review);
       const tb = $("tabReviewBadge");
       if (tb) { tb.textContent = st.stats.pending_review;
         tb.classList.toggle("show", st.stats.pending_review > 0); }

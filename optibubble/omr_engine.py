@@ -387,9 +387,10 @@ def _crop(warped: np.ndarray, lay: SheetLayout, box_mm: Tuple[float, float, floa
         return ""
     crop = warped[px[1]:px[3], px[0]:px[2]]
     h = crop.shape[0]
-    if h > 0 and abs(h - 96) > 12:                    # normalise height ≈ 96 px
-        f = 96.0 / h
-        crop = cv2.resize(crop, (max(1, int(crop.shape[1] * f)), 96))
+    if h > 0 and abs(h - 140) > 12:                   # normalise height ≈ 140 px
+        f = 140.0 / h
+        crop = cv2.resize(crop, (max(1, int(crop.shape[1] * f)), 140),
+                          interpolation=cv2.INTER_CUBIC)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{name}.png"
     cv2.imwrite(str(path), crop)

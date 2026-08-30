@@ -255,6 +255,13 @@ def create_app(hub: Hub) -> Flask:
             abort(404)
         return Response(data, mimetype="image/png")
 
+    @app.route("/api/key.pdf")
+    def key_pdf():
+        p = hub.key_pdf_path()
+        if not p:
+            abort(404)
+        return send_file(p, mimetype="application/pdf")
+
     @app.route("/api/sheet.pdf")
     def sheet_pdf():
         p = hub.pdf_path()

@@ -10,29 +10,30 @@
 <body>
 <div class="app">
   <div class="brand">
-    <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" id="brandLogo">
-    <span class="mini">OB</span>
+    <img class="wordmark" src="/assets/logo-wordmark-white.png" alt="OPTIBubble" id="brandLogo">
+    <img class="mini-icon" src="/assets/icon-128.png" alt="OPTIBubble">
   </div>
 
-  <div class="topbar">
+  <div class="topbar" id="topbar">
+    <span class="toplabel">Test</span>
+    <span class="testchip" id="testChipTop"></span>
     <div class="tabs" id="tabs"></div>
     <div class="spacer"></div>
-    <span class="pill off" id="srvPill">● server offline</span>
-    <button class="iconbtn" id="themeBtn" title="Toggle theme">◐</button>
-  </div>
+  </div></div>
 
   <nav class="nav">
-    <div class="logo"><img src="/assets/logo-wordmark-white.png" alt=""></div>
-    <div class="tag">SCAN · GRADE · DONE</div>
+    <div class="navlabel">System</div>
     <a class="item" data-page="dashboard"><i data-icon="home" data-size="15" class="ic"></i><span>Dashboard</span></a>
-    <a class="item" data-page="setup"><i data-icon="pencil" data-size="15" class="ic"></i><span>New Test</span></a>
-    <a class="item" data-page="serve"><i data-icon="scan" data-size="15" class="ic"></i><span>Scan &amp; Serve</span></a>
-    <a class="item" data-page="review"><i data-icon="queue" data-size="15" class="ic"></i><span>Review Queue</span>
-      <span class="badge" id="navReviewBadge">0</span></a>
-    <a class="item" data-page="results"><i data-icon="table" data-size="15" class="ic"></i><span>Results</span></a>
     <a class="item" data-page="settings"><i data-icon="settings" data-size="15" class="ic"></i><span>Settings</span></a>
     <a class="item" data-page="help"><i data-icon="help" data-size="15" class="ic"></i><span>Help &amp; FAQ</span></a>
-    <div class="foot">v<span id="ver"></span><br>100% local · no cloud<br><span id="dataDir" class="mono"></span></div>
+    <div class="foot">
+      <span class="pill off" id="srvPill">server offline</span>
+      <div class="footrow">
+        <button class="iconbtn" id="themeBtn" title="Toggle theme">◐</button>
+        <span class="muted">v<span id="ver"></span> · local only</span>
+      </div>
+      <span class="mono" id="dataDir" style="word-break:break-all"></span>
+    </div>
   </nav>
 
   <main class="main">
@@ -150,11 +151,11 @@
                 the scanner ignores them. Leave empty for none (max 6).</span></div>
           </div>
           <div class="card">
-            <h3>Sheet preview (PDF)</h3>
-            <p class="sub">The actual printable PDF — appears after you create
-               the test. Print at 100% (“Actual size”).</p>
+            <h3>Preview</h3>
+            <p class="sub">Rendered live from the generated sheet — appears after
+               you create the test.</p>
             <div class="previewbox" id="previewBox" style="display:none">
-              <embed id="previewPdf" type="application/pdf" src="" style="width:100%; height:520px">
+              <img id="previewImg" alt="Sheet preview" style="cursor:zoom-in">
             </div>
           </div>
         </div>
@@ -188,10 +189,10 @@
           </div>
           <select id="ipSel" style="max-width:280px"></select>
           <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
-          <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" style="text-decoration:none">Open sheet PDF — print at 100%</a>
-        </div>
-        <div class="pagetop">
-          <span class="testchip" id="testChipServe"></span>
+          <div style="display:flex; gap:8px; width:100%">
+            <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" rel="noopener" style="text-decoration:none; flex:1"><i data-icon="printer"></i>Sheet PDF · 100%</a>
+            <a class="btn ghost sm" href="/api/key.pdf" target="_blank" rel="noopener" id="keyPdfBtn" style="text-decoration:none; flex:1"><i data-icon="key"></i>Answer key</a>
+          </div>
         </div>
         <div class="card" id="keyCard" style="display:none">
           <h3>Answer key</h3>
@@ -214,9 +215,6 @@
 
     <!-- ============================ REVIEW ============================ -->
     <section class="page" id="page-review">
-      <div class="pagetop">
-        <span class="testchip" id="testChipReview"></span>
-      </div>
       <div class="review">
         <div class="card">
           <h3>Flagged sheets <span class="badge warn" id="reviewCount">0</span></h3>
@@ -232,9 +230,6 @@
 
     <!-- ============================ RESULTS ============================ -->
     <section class="page" id="page-results">
-      <div class="pagetop">
-        <span class="testchip" id="testChipResults"></span>
-      </div>
       <div class="card">
         <div class="restop">
           <h3>Results</h3>

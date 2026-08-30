@@ -26,7 +26,7 @@ from werkzeug.serving import make_server
 from .config import AdvancedSettings, TestConfig, default_data_dir, settings_path
 from .layout import SheetLayout
 from .omr_engine import GradeResult, OMRReject, grade_photo
-from .sheet_generator import generate_sheet_pdf, render_pdf_preview
+from .sheet_generator import generate_key_pdf, generate_sheet_pdf, render_pdf_preview
 from .storage import Storage, result_from_json
 
 
@@ -147,8 +147,18 @@ class Hub:
         if generate_pdf:
             generate_sheet_pdf(test, self.storage.test_root(test) / "sheet.pdf",
                                self.layout)
+            try:
+                generate_key_pdf(test, self.storage.test_root(test) / "key.pdf")
+            except Exception:
+                pass
         self.test = test
         self.emit("test_created", test_id=test.test_id, title=test.title)
+
+    def key_pdf_path(self) -> Optional[Path]:
+        if not self.test:
+            return None
+        p = self.storage.test_root(self.test) / "key.pdf"
+        return p if p.exists() else None
 
     def pdf_path(self) -> Optional[Path]:
         if not self.test:
@@ -241,9 +251,13 @@ class Hub:
         self.storage.save_test(t, layout)
         if self.test and self.test.test_id == test_id:
             self.test, self.layout = t, layout
-        # cheap and always correct: refresh the printable sheet
+        # cheap and always correct: refresh the printable sheet + key
         try:
             generate_sheet_pdf(t, self.storage.test_root(t) / "sheet.pdf", layout)
+        except Exception:
+            pass
+        try:
+            generate_key_pdf(t, self.storage.test_root(t) / "key.pdf")
         except Exception:
             pass
         self.log(f"Test edited — {t.title} ({t.test_id})"

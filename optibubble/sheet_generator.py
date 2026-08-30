@@ -396,3 +396,83 @@ def render_pdf_preview(pdf_path: Path, out_png: Path, dpi: int = 150) -> Optiona
         return out_png
     except Exception:
         return None
+
+
+# ----------------------------------------------------------------------------
+# Answer-key PDF — the teacher's companion sheet
+# ----------------------------------------------------------------------------
+def generate_key_pdf(test: TestConfig, out_path: Path) -> Path:
+    """One-page answer key: header + column grid of Q#→letter + compact string."""
+    from .layout import PAGE_SIZES
+    pw, ph = PAGE_SIZES.get(test.page_size, PAGE_SIZES["a4"])
+    c = rl_canvas.Canvas(str(out_path), pagesize=(_mm(pw), _mm(ph)))
+    c.setTitle(f"Answer Key — {test.title}")
+    c.setAuthor("OPTIBubble")
+
+    register_fonts()
+    letters = LETTERS[: test.options_per_question]
+
+    # header
+    try:
+        c.setFont(FONT_OPTI, 15)
+    except Exception:
+        c.setFont(f"{FONT_OPEN_SANS}-Bold", 12)
+    c.setFillColorRGB(*LOGO_BRAND)
+    c.drawString(_mm(20), _mm(ph - 22), "OPTIBubble")
+
+    c.setFillColorRGB(*INK)
+    c.setFont(f"{FONT_OPEN_SANS}-ExtraBold", 16)
+    c.drawString(_mm(20), _mm(ph - 36), "ANSWER KEY")
+    c.setFont(FONT_OPEN_SANS, 8.5)
+    c.setFillColorRGB(*GREY)
+    c.drawString(_mm(20), _mm(ph - 42),
+                 f"{test.title}  ·  {test.subject}  ·  {test.num_questions} questions"
+                 f"  ·  {test.test_id}")
+    import time as _t
+    c.drawRightString(_mm(pw - 20), _mm(ph - 42), _t.strftime("%Y-%m-%d %H:%M"))
+
+    c.setStrokeColorRGB(*LOGO_BRAND)
+    c.setLineWidth(0.8)
+    c.line(_mm(20), _mm(ph - 47), _mm(pw - 20), _mm(ph - 47))
+
+    # grid of answers
+    entries = sorted((int(q), a) for q, a in (test.answer_key or {}).items())
+    per_col = 30
+    cols = max(1, min(4, -(-len(entries) // per_col))) if entries else 1
+    col_w = (pw - 40) / cols
+    y0 = ph - 58
+    row_h = 6.2
+    for i, (q, a) in enumerate(entries):
+        col, row = divmod(i, per_col)
+        x = 20 + col * col_w
+        y = y0 - row * row_h
+        c.setFont(f"{FONT_OPEN_SANS}-SemiBold", 9)
+        c.setFillColorRGB(*GREY)
+        c.drawRightString(_mm(x + 8), _mm(y), f"{q}")
+        c.setFont(f"{FONT_OPEN_SANS}-ExtraBold", 10.5)
+        c.setFillColorRGB(*INK)
+        c.drawString(_mm(x + 12), _mm(y), str(a).upper())
+
+    # compact one-line key
+    if entries:
+        compact = " ".join(a for _, a in entries)
+        c.setFont(FONT_OPEN_SANS, 7.5)
+        c.setFillColorRGB(*GREY)
+        c.drawString(_mm(20), _mm(24),
+                     "Compact (order Q1→Q" + str(len(entries)) + "):  " + compact[:150])
+
+    # "for grading use" bubble strip of the key itself
+    y = 16
+    c.setFont(FONT_OPEN_SANS, 6)
+    c.setFillColorRGB(*GREY)
+    c.drawString(_mm(20), _mm(30),
+                 f"Valid options: A–{letters[-1]} · grading scores defined questions only")
+    try:
+        c.setFont(FONT_OPTI, 7)
+        c.setFillColorRGB(*LOGO_BRAND)
+        c.drawString(_mm(20), _mm(10), "OPTIBubble")
+    except Exception:
+        pass
+    c.showPage()
+    c.save()
+    return Path(out_path)

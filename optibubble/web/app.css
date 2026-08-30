@@ -79,10 +79,17 @@ button{font-family:inherit}
   grid-template-areas:"brand topbar" "nav main";height:100vh}
 .brand{grid-area:brand;display:flex;align-items:center;gap:10px;padding:0 16px;
   background:var(--bg1);position:relative}
-.brand img{height:23px}
-.brand .mini{display:none;font-weight:800;letter-spacing:.06em}
-.topbar{grid-area:topbar;display:flex;align-items:center;gap:14px;padding:0 18px;
-  background:var(--bg1);position:relative}
+.brand .wordmark{height:23px}
+.brand .mini-icon{display:none;height:30px;width:30px;border-radius:6px}
+.topbar{grid-area:topbar;display:flex;align-items:center;gap:12px;padding:0 16px;
+  background:var(--bg1);position:relative;min-width:0}
+.app.sysmode{grid-template-rows:0 1fr}
+.app.sysmode .topbar{display:none}
+.toplabel{font-size:9px;color:var(--tx3);letter-spacing:.2em;font-weight:800;
+  text-transform:uppercase;flex:none}
+.tabs{overflow-x:auto;scrollbar-width:none;min-width:0}
+.tabs::-webkit-scrollbar{display:none}
+.testchip{flex:none;max-width:260px}
 .topbar::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;
   background:linear-gradient(90deg,transparent,var(--hair2) 12%,var(--hair2) 88%,transparent)}
 .nav{grid-area:nav;background:var(--bg1);padding:14px 10px;display:flex;
@@ -114,10 +121,10 @@ button{font-family:inherit}
 .iconbtn:hover{color:var(--tx);background:var(--bg2)}
 
 /* ----------------------------------------------------------------- nav */
-.nav .logo{margin:2px 6px 2px 8px}
-.nav .logo img{height:26px}
-.nav .tag{font-size:9.5px;color:var(--tx3);letter-spacing:.22em;font-weight:800;
-  margin:0 0 12px 8px}
+.navlabel{font-size:9px;color:var(--tx3);letter-spacing:.2em;font-weight:800;
+  margin:4px 6px 8px 11px;text-transform:uppercase}
+.nav .foot .pill{align-self:flex-start;margin-bottom:8px}
+.nav .footrow{display:flex;align-items:center;gap:8px}
 .nav a.item{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:4px;
   color:var(--tx2);text-decoration:none;font-weight:700;font-size:12.5px;cursor:pointer;
   letter-spacing:.01em}
@@ -324,9 +331,15 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:2px;
 .ritem b{font-size:12.5px;font-weight:800;font-feature-settings:var(--num)}
 .ritem .m{font-size:10.5px;color:var(--tx3);font-feature-settings:var(--num);
   letter-spacing:.03em}
-.flagcard{display:grid;grid-template-columns:300px 1fr;gap:13px;background:var(--bg0);
-  border-radius:4px;padding:12px;margin-bottom:8px}
-.flagcard img{width:100%;border-radius:3px;background:#fff}
+.flagcard{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:13px;
+  background:var(--bg0);border-radius:4px;padding:12px;margin-bottom:8px}
+.evidence{background:#fff;border:1px solid var(--hair2);border-radius:4px;
+  padding:10px 12px;overflow-x:auto}
+.evidence img{height:130px;width:auto;max-width:none;border-radius:2px;
+  display:block;margin:0 auto}
+.evidence .cap{display:flex;align-items:center;justify-content:center;gap:6px;
+  color:#5B6779;font-size:9.5px;font-weight:800;letter-spacing:.12em;
+  text-transform:uppercase;margin-top:7px}
 .flagcard .ops{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
 .flagcard .ops button{min-width:36px;padding:7px 0;border-radius:3px;border:0;
   background:var(--bg3);color:var(--tx);font-weight:800;cursor:pointer;font-size:12px;
@@ -354,7 +367,7 @@ details.faq p{color:var(--tx2);font-size:12px;margin:8px 0 2px}
 
 @media (max-width:1060px){
   .app{grid-template-columns:58px 1fr;grid-template-areas:"brand topbar" "nav main"}
-  .brand img{display:none} .brand .mini{display:inline}
+  .brand .wordmark{display:none} .brand .mini-icon{display:inline}
   .nav a.item span{display:none} .nav .tag,.nav .logo,.nav .foot{display:none}
   .stats{grid-template-columns:1fr 1fr}
   .hero,.setup,.serve,.review{grid-template-columns:1fr}
@@ -513,7 +526,6 @@ input[type=text],input[type=number],textarea,select{min-width:0}
   .hero h1{font-size:17px}
   .hero p{font-size:12px}
   .steps{grid-template-columns:1fr}
-  .flagcard img{max-height:220px;width:auto;max-width:100%;margin:0 auto}
   .qrgrid{grid-template-columns:1fr}
   .testchip b{max-width:170px}
   .pagetop{gap:8px}

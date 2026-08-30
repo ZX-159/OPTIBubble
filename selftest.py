@@ -532,6 +532,26 @@ def main() -> int:
           and r.headers.get("Content-Type", "").startswith("application/pdf")
           and r.data[:5] == b"%PDF-")
 
+    # answer key PDF: served, valid, refreshed after edits
+    import time as _t2
+    r = client.get("/api/key.pdf")
+    ok_key = (r.status_code == 200 and r.data[:5] == b"%PDF-")
+    if ok_key:
+        import pymupdf as _pm
+        _txt = _pm.open(stream=r.data, filetype="pdf")[0].get_text()
+        ok_key = "ANSWER KEY" in _txt and hub.test.title in _txt
+    client.post("/api/tests", content_type="application/json", json={
+        "title": "KeyPdf", "num_questions": 9, "options_per_question": 4,
+        "answer_key": {str(i): "ABCD"[i % 4] for i in range(1, 10)}})
+    kp = Path(hub.data_dir) / "tests" / hub.test.test_id / "key.pdf"
+    m1 = kp.stat().st_mtime_ns if kp.exists() else 0
+    _t2.sleep(0.05)
+    client.post(f"/api/tests/{hub.test.test_id}/edit",
+                json={"answer_key": {str(i): "DCBA"[i % 4] for i in range(1, 10)}})
+    m2 = kp.stat().st_mtime_ns if kp.exists() else 0
+    check("answer-key PDF served + regenerated on edit",
+          ok_key and m2 > m1, f"mtime {m1}→{m2}")
+
     r = client.post("/api/tests", content_type="application/json", json={
         "title": "API Sheet Design", "num_questions": 12, "options_per_question": 4,
         "student_id_digits": 7, "page_size": "a4",
