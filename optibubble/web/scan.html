@@ -80,6 +80,7 @@ button{font-family:inherit;border:0;cursor:pointer;color:var(--tx)}
   border:2px solid var(--brand-ink);opacity:.85}
 .roundbtn{width:44px;height:44px;border-radius:4px;background:var(--bg3);
   font-size:17px;line-height:1}
+.roundbtn.on{background:var(--brand);color:var(--brand-ink)}
 .roundbtn:active{transform:scale(.93);background:var(--bg2)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:12px 20px;border-radius:4px;font-size:13.5px;font-weight:800;
@@ -138,7 +139,7 @@ input[type=file]{display:none}
     <ol>
       <li>Hold the sheet <b>flat</b> on a well-lit table</li>
       <li>Fit all <b>4 corner squares</b> inside the frame</li>
-      <li>Snap — grading happens instantly on the teacher's computer</li>
+      <li>Snap — grading happens on this computer in milliseconds</li>
     </ol>
     <div class="actions">
       <button class="btn" id="startBtn"><span data-mico="camera" data-size="16"></span>&nbsp;Start camera</button>
@@ -166,6 +167,7 @@ input[type=file]{display:none}
       </div>
     </div>
     <div class="controls">
+      <button class="roundbtn" id="mirrorBtn" title="Mirror to desktop">⌁</button>
       <button class="roundbtn" id="torchBtn" title="Torch"><span data-mico="torch" data-size="19"></span></button>
       <button class="shutter" id="shutterBtn" aria-label="Capture"></button>
       <button class="roundbtn" id="galleryBtn" title="Choose from gallery"><span data-mico="image" data-size="19"></span></button>
@@ -197,7 +199,7 @@ input[type=file]{display:none}
   </section>
 </main>
 
-<footer><b id="counter">0</b> sheets submitted this session · local network only — your data never leaves the room</footer>
+<footer><b id="counter">0</b> sheets submitted this session · local network only — your data never leaves this network</footer>
 
 <script>
 "use strict";
@@ -226,7 +228,7 @@ fetch("/api/info/"+token).then(r=>r.json()).then(d=>{
     if(d.quality)CFG.quality=d.quality/100;
     if(d.width)CFG.width=d.width;}
   else{$("testTitle").textContent="Session not found";
-    $("testSub").textContent="Please scan the QR code on the teacher's screen again.";}
+    $("testSub").textContent="Please scan the QR code on the desktop again.";}
 }).catch(()=>{$("netChip").innerHTML=mico("alert",12)+" Offline";});
 
 /* ---------- view switch ---------- */
@@ -238,7 +240,7 @@ async function startCamera(){
   if(!window.isSecureContext){
     // plain HTTP → the browser forbids the in-page camera. Point the student
     // at the one-time certificate (code A) and use the native fallback for now.
-    $("hint").innerHTML="Live camera needs HTTPS — ask the teacher for code A "+
+    $("hint").innerHTML="Live camera needs HTTPS — use code A from the desktop "+
       '(<a href="/cert" style="color:#FF7448">enable it once</a>), or use the '+
       "upload button which always works.";
   }
@@ -288,82 +290,182 @@ function handleFile(file){
    fire). All local, ~4 ms per frame at 160 px width.
    ================================================================ */
 const EDGE={proc:document.createElement("canvas"),run:false,timer:null,
-  boxes:[],stable:0,lastCap:0,iv:120};
-EDGE.proc.width=160;
+  anchors:null,quad:null,stable:0,lastCap:0,iv:120,frames:0};
+EDGE.proc.width=168;
 function edgeTick(){
   if(!EDGE.run){return;}
   const v=$("video");
   if(v.videoWidth>0){try{edgeDetect(v);}catch(e){/* keep the camera usable */}}
   EDGE.timer=setTimeout(edgeTick,EDGE.iv);
 }
+/* Find the four printed black squares the same way the desktop engine does:
+   dark mask → connected components in each corner region → keep square blobs
+   in the anchor size band → pick the one nearest the frame corner. Falls back
+   to Sobel edge bounds when the squares aren't visible. ~3-6 ms per frame. */
 function edgeDetect(v){
-  const W=160,H=Math.max(1,Math.round(W*v.videoHeight/v.videoWidth));
-  const pc=EDGE.proc; if(pc.height!==H){pc.height=H;}
-  const g=pc.getContext("2d",{willReadFrequently:true});
+  const W=EDGE.proc.width;
+  const H=Math.max(2,Math.round(W*v.videoHeight/v.videoWidth));
+  if(EDGE.proc.height!==H){EDGE.proc.height=H;}
+  const g=EDGE.proc.getContext("2d",{willReadFrequently:true});
   g.drawImage(v,0,0,W,H);
   const d=g.getImageData(0,0,W,H).data;
   const lum=new Float32Array(W*H);
-  for(let i=0,j=0;i<d.length;i+=4,j++)lum[j]=.299*d[i]+.587*d[i+1]+.114*d[i+2];
-  // sobel magnitude
-  const mag=new Float32Array(W*H);
-  let sum=0,sq=0,n=0;
-  for(let y=1;y<H-1;y++){
-    for(let x=1;x<W-1;x++){
-      const i=y*W+x;
-      const gx=-lum[i-W-1]-2*lum[i-1]-lum[i+W-1]+lum[i-W+1]+2*lum[i+1]+lum[i+W+1];
-      const gy=-lum[i-W-1]-2*lum[i-W]-lum[i-W+1]+lum[i+W-1]+2*lum[i+W]+lum[i+W+1];
-      const m=Math.hypot(gx,gy); mag[i]=m; sum+=m; sq+=m*m; n++;
+  let lsum=0;
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    lum[j]=.299*d[i]+.587*d[i+1]+.114*d[i+2];lsum+=lum[j];
+  }
+  const mean=lsum/lum.length;
+  const darkTh=Math.min(mean*0.55,105);
+  const mask=new Uint8Array(W*H);
+  for(let j=0;j<lum.length;j++)mask[j]=lum[j]<darkTh?1:0;
+
+  // ---- corner search regions (as fractions of the frame) ----------------
+  const ROIs=[[0,0,.46,.42],[.54,0,1,.42],[0,.58,.46,1],[.54,.58,1,1]];
+  const anchors=[];
+  for(let ri=0;ri<4;ri++){
+    const [fx0,fy0,fx1,fy1]=ROIs[ri];
+    const X0=Math.floor(fx0*W),X1=Math.ceil(fx1*W),
+          Y0=Math.floor(fy0*H),Y1=Math.ceil(fy1*H);
+    const seen=new Uint8Array(W*H);
+    let best=null;
+    const cx0=(fx0+fx1)/2*W,cy0=(fy0+fy1)/2*H;   // ROI centre for tie-breaks
+    for(let y=Y0;y<Y1;y++)for(let x=X0;x<X1;x++){
+      const i0=y*W+x;
+      if(!mask[i0]||seen[i0])continue;
+      // flood fill this dark component
+      const stack=[i0];seen[i0]=1;
+      let n=0,sx=0,sy=0,bx0=x,bx1=x,by0=y,by1=y;
+      while(stack.length){
+        const i=stack.pop();const iy=(i/W)|0,ix=i-iy*W;
+        n++;sx+=ix;sy+=iy;
+        if(ix<bx0)bx0=ix;if(ix>bx1)bx1=ix;
+        if(iy<by0)by0=iy;if(iy>by1)by1=iy;
+        if(ix>X0){const k=i-1;if(mask[k]&&!seen[k]){seen[k]=1;stack.push(k);}}
+        if(ix<X1-1){const k=i+1;if(mask[k]&&!seen[k]){seen[k]=1;stack.push(k);}}
+        if(iy>Y0){const k=i-W;if(mask[k]&&!seen[k]){seen[k]=1;stack.push(k);}}
+        if(iy<Y1-1){const k=i+W;if(mask[k]&&!seen[k]){seen[k]=1;stack.push(k);}}
+      }
+      const bw=bx1-bx0+1,bh=by1-by0+1,ar=bw/bh,fill=n/(bw*bh);
+      // anchor-size band: ~10 mm on a 210 mm page seen across most of the
+      // frame → about 3 %-9 % of the frame width, solid and square-ish
+      const minS=Math.max(3,0.022*W),maxS=0.085*W;
+      if(n>=10&&bw>=minS&&bw<=maxS&&bh>=minS&&bh<=maxS&&
+         ar>0.55&&ar<1.8&&fill>0.5){
+        const cx=sx/n,cy=sy/n;
+        // prefer the candidate closest to the FRAME corner of this ROI
+        const fcx=ri%2?W:0,fcy=ri<2?0:H;
+        const dist=Math.hypot(cx-fcx,cy-fcy);
+        const alt=Math.hypot(cx-cx0,cy-cy0);   // ROI-centre tiebreak
+        if(!best||dist+0.15*alt<best.score)best={cx,cy,s:Math.max(bw,bh),score:dist+0.15*alt};
+      }
     }
+    anchors.push(best);
   }
-  const mean=sum/Math.max(1,n);
-  const th=Math.max(60,mean+1.6*Math.sqrt(Math.max(0,sq/n-mean*mean)));
-  // collect strong-edge coordinates (2nd..98th pct → ignore specks)
-  const xs=[],ys=[];
-  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
-    if(mag[y*W+x]>th){xs.push(x);ys.push(y);}
+
+  const all4=anchors.every(Boolean);
+  let quad=null,alignedNow=false;
+  if(all4){
+    quad=[anchors[0],anchors[1],anchors[3],anchors[2]];   // TL,TR,BR,BL
+    // stability across the last frames
+    EDGE.hist=EDGE.hist||[];
+    EDGE.hist.push(anchors.map(a=>({x:a.cx,y:a.cy})));
+    if(EDGE.hist.length>6)EDGE.hist.shift();
+    let jitter=0;
+    if(EDGE.hist.length>=5){
+      for(let a=0;a<4;a++){
+        let mx=1e9,Mx=-1,my=1e9,My=-1;
+        EDGE.hist.forEach(f=>{mx=Math.min(mx,f[a].x);Mx=Math.max(Mx,f[a].x);
+                              my=Math.min(my,f[a].y);My=Math.max(My,f[a].y);});
+        jitter=Math.max(jitter,Mx-mx,My-my);
+      }
+    }
+    const top=Math.hypot(anchors[1].cx-anchors[0].cx,anchors[1].cy-anchors[0].cy);
+    const left=Math.hypot(anchors[3].cx-anchors[0].cx,anchors[3].cy-anchors[0].cy);
+    const aspect=top/Math.max(1,left);
+    const cover=quadArea(quad,W,H);
+    alignedNow=EDGE.hist.length>=5&&jitter<=3.5&&cover>0.18&&
+               aspect>0.5&&aspect<1.05;
+    EDGE.anchors=anchors;EDGE.stable=alignedNow?EDGE.stable+1:0;
+  }else{
+    EDGE.anchors=null;EDGE.stable=0;EDGE.hist=[];
   }
+
+  // ---- draw ---------------------------------------------------------------
   const cv=$("edgeCanvas");
   const cw=cv.clientWidth||1,ch=cv.clientHeight||1;
   if(cv.width!==cw||cv.height!==ch){cv.width=cw;cv.height=ch;}
   const c2=cv.getContext("2d");
   c2.clearRect(0,0,cw,ch);
-  if(xs.length<40){setAlign("hunt","searching for the sheet…");EDGE.stable=0;return;}
-  xs.sort((a,b)=>a-b);ys.sort((a,b)=>a-b);
-  const q=(a,p)=>a[Math.floor(p*(a.length-1))];
-  const x0=q(xs,.02),x1=q(xs,.98),y0=q(ys,.02),y1=q(ys,.98);
-  const box={x0,y0,x1,y1,w:x1-x0,h:y1-y0};
-  // stability: size/centre jitter over the last frames
-  EDGE.boxes.push(box);if(EDGE.boxes.length>6)EDGE.boxes.shift();
-  const sx=EDGE.boxes.map(b=>b.w),sy=EDGE.boxes.map(b=>b.h);
-  const jx=Math.max(...sx)-Math.min(...sx),jy=Math.max(...sy)-Math.min(...sy);
-  const aspect=box.w/Math.max(1,box.h);
-  const cover=(box.w*box.h)/(W*H);
-  const aligned=EDGE.boxes.length>=4&&jx<10&&jy<10&&cover>0.30&&
-                aspect>0.45&&aspect<1.05;
-  const col=aligned?"#3FBF7C":"#60A5FA";
-  const kx=cw/W,ky=ch/H,pad=8;
-  c2.lineWidth=2.5;c2.strokeStyle=col;
-  c2.beginPath();
-  c2.moveTo(box.x0*kx-pad,box.y0*ky-pad);c2.lineTo(box.x1*kx+pad,box.y0*ky-pad);
-  c2.lineTo(box.x1*kx+pad,box.y1*ky+pad);c2.lineTo(box.x0*kx-pad,box.y1*ky+pad);
-  c2.closePath();c2.stroke();
-  const L=22;
-  [[box.x0*kx-pad,box.y0*ky-pad,1,1],[box.x1*kx+pad,box.y0*ky-pad,-1,1],
-   [box.x0*kx-pad,box.y1*ky+pad,1,-1],[box.x1*kx+pad,box.y1*ky+pad,-1,-1]]
-  .forEach(([cx,cy,dx,dy])=>{
-    c2.beginPath();c2.lineWidth=4;c2.strokeStyle=col;
-    c2.moveTo(cx,cy);c2.lineTo(cx+dx*L,cy);
-    c2.moveTo(cx,cy);c2.lineTo(cx,cy+dy*L);c2.stroke();
-  });
-  if(aligned){
-    EDGE.stable++;setAlign("ok","aligned — hold steady");
+  const kx=cw/W,ky=ch/H;
+  if(quad){
+    const col=alignedNow?"#3FBF7C":"#60A5FA";
+    // outline through the anchor centres
+    c2.lineWidth=2;c2.strokeStyle=col;c2.setLineDash(alignedNow?[]:[7,5]);
+    c2.beginPath();
+    c2.moveTo(quad[0].cx*kx,quad[0].cy*ky);
+    for(let i=1;i<4;i++)c2.lineTo(quad[i].cx*kx,quad[i].cy*ky);
+    c2.closePath();c2.stroke();c2.setLineDash([]);
+    // brackets locked on each black square
+    quad.forEach(a=>{
+      const s=Math.max(15,a.s*1.7)*((kx+ky)/2);
+      const x=a.cx*kx,y=a.cy*ky;
+      c2.lineWidth=4;c2.strokeStyle=col;c2.lineCap="round";
+      [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([dx,dy])=>{
+        c2.beginPath();
+        c2.moveTo(x+dx*s,y+dy*s-dy*(s*0.55));c2.lineTo(x+dx*s,y+dy*s);
+        c2.lineTo(x+dx*s-dx*(s*0.55),y+dy*s);c2.stroke();
+      });
+    });
+  }else{
+    // fallback: strong-edge bounds so the user still gets guidance
+    const e=sobelBounds(lum,W,H);
+    if(e){const col="#60A5FA",pad=8;c2.lineWidth=2;c2.strokeStyle=col;
+      c2.setLineDash([7,5]);c2.beginPath();
+      c2.moveTo(e.x0*kx-pad,e.y0*ky-pad);c2.lineTo(e.x1*kx+pad,e.y0*ky-pad);
+      c2.lineTo(e.x1*kx+pad,e.y1*ky+pad);c2.lineTo(e.x0*kx-pad,e.y1*ky+pad);
+      c2.closePath();c2.stroke();c2.setLineDash([]);}
+  }
+
+  if(alignedNow){
+    setAlign("ok","aligned \u2014 hold steady");
     if($("autoCap").checked&&EDGE.stable>=6&&Date.now()-EDGE.lastCap>4000){
       EDGE.lastCap=Date.now();EDGE.stable=0;
       $("flash").classList.add("go");
       setTimeout(()=>$("flash").classList.remove("go"),340);
       snapPhoto();
     }
-  }else{EDGE.stable=0;setAlign("hunt","align the sheet in the frame");}
+  }else{
+    setAlign("hunt",all4?"almost \u2014 fill the frame":"align the sheet in the frame");
+  }
+  EDGE.frames++;
+}
+function quadArea(q,W,H){
+  let a=0;
+  for(let i=0;i<4;i++){
+    const p=q[i],r=q[(i+1)%4];
+    a+=p.cx*r.cy-r.cx*p.cy;
+  }
+  return Math.abs(a/2)/(W*H);
+}
+function sobelBounds(lum,W,H){
+  let sum=0,sq=0,n=0;
+  const mag=new Float32Array(W*H);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+    const i=y*W+x;
+    const gx=-lum[i-W-1]-2*lum[i-1]-lum[i+W-1]+lum[i-W+1]+2*lum[i+1]+lum[i+W+1];
+    const gy=-lum[i-W-1]-2*lum[i-W]-lum[i-W+1]+lum[i+W-1]+2*lum[i+W]+lum[i+W+1];
+    const m=Math.hypot(gx,gy);mag[i]=m;sum+=m;sq+=m*m;n++;
+  }
+  const mean=sum/Math.max(1,n);
+  const th=Math.max(60,mean+1.6*Math.sqrt(Math.max(0,sq/n-mean*mean)));
+  const xs=[],ys=[];
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+    if(mag[y*W+x]>th){xs.push(x);ys.push(y);}
+  }
+  if(xs.length<40)return null;
+  xs.sort((a,b)=>a-b);ys.sort((a,b)=>a-b);
+  const q=(a,p)=>a[Math.floor(p*(a.length-1))];
+  return {x0:q(xs,.02),x1:q(xs,.98),y0:q(ys,.02),y1:q(ys,.98)};
 }
 function setAlign(mode,txt){
   const el=$("alignState");
@@ -465,7 +567,7 @@ function poll(rid){
     fetch("/api/receipt/"+rid).then(r=>r.json()).then(d=>{
       if(d.status==="done"){bar.style.width="100%";setTimeout(()=>showResult(d.result),250);}
       else if(d.status==="error")showError(d.error.code,d.error.message,d.error.hint);
-      else if(Date.now()-t0>25000)showError("TIMEOUT","Grading is taking unusually long.","The teacher can finish it from the review queue.");
+      else if(Date.now()-t0>25000)showError("TIMEOUT","Grading is taking unusually long.","Finish it from the desktop review queue.");
       else setTimeout(loop,650);
     }).catch(()=>{ if(Date.now()-t0>25000)showError("TIMEOUT","Lost contact while grading.","Try again.");else setTimeout(loop,900); });
   })();
@@ -485,7 +587,7 @@ function showResult(r){
       <div><b>${Math.round(r.confidence*100)}%</b><span>confidence</span></div></div></div>`;
   }else{
     b.innerHTML=`<div class="pop"><span class="badge warn"><span data-mico="user" data-size="12"></span>&nbsp;Sent for review</span>
-      <h1 style="font-size:17px;margin:10px 0 4px">Flagged for the teacher</h1>
+      <h1 style="font-size:17px;margin:10px 0 4px">Sent for review</h1>
       <p class="sub" style="margin:0">${r.flags&&r.flags.length?r.flags.length+" item(s) need a human check (faint / double / blank marks).":"Manual verification requested."}</p>
       <ul class="flags">${(r.flags||[]).slice(0,6).map(f=>"<li>• "+esc(f.message||f.kind)+"</li>").join("")}</ul></div>`;
   }
@@ -501,6 +603,41 @@ function showError(code,msg,hint){
 }
 
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+/* ------------- mirror the live viewfinder to the desktop --------
+   Local WebRTC: the desktop posts an offer via the server, this page answers
+   with the camera track. Media flows peer-to-peer over the local Wi-Fi. */
+let mirrorPC=null,mirrorTimer=null;
+async function mirrorToggle(){
+  if(mirrorPC){teardownMirror();return;}
+  if(!stream){$("hint").textContent="Start the camera first";return;}
+  mirrorPC=new RTCPeerConnection();
+  stream.getVideoTracks().forEach(t=>mirrorPC.addTrack(t,stream));
+  let offer=null;
+  for(let i=0;i<20&&!offer;i++){
+    try{const r=await fetch("/api/mirror/offer").then(x=>x.json());
+      if(r.payload)offer=r.payload;}catch(e){}
+    if(!offer)await new Promise(r=>setTimeout(r,900));
+  }
+  if(!offer){$("hint").textContent="Desktop is not monitoring";teardownMirror();return;}
+  await mirrorPC.setRemoteDescription(offer);
+  const answer=await mirrorPC.createAnswer();
+  await mirrorPC.setLocalDescription(answer);
+  await new Promise(res=>{const t=setTimeout(res,1800);
+    mirrorPC.onicegatheringstatechange=()=>{if(mirrorPC.iceGatheringState==="complete"){clearTimeout(t);res();}};});
+  await fetch("/api/mirror/answer",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(mirrorPC.localDescription)});
+  $("mirrorBtn").classList.add("on");
+  $("hint").innerHTML="Mirroring to the desktop · tap again to stop";
+}
+function teardownMirror(){
+  if(mirrorPC){try{mirrorPC.close();}catch(e){}mirrorPC=null;}
+  clearTimeout(mirrorTimer);
+  $("mirrorBtn").classList.remove("on");
+  $("hint").textContent="Fill the frame — all 4 black corner squares must be visible";
+}
+$("mirrorBtn").onclick=mirrorToggle;
 
 window.addEventListener("beforeunload",()=>{if(stream)stream.getTracks().forEach(t=>t.stop());});
 </script>

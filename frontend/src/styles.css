@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ======================================================================
+   SIGHTLINE — OPTIBubble design language v4
+   Instrument-grade dark UI with a warm paper content plane.
+   Chrome recedes; the sheet advances. Two accents, two jobs:
+   iris = the machine · vermilion = the grading pen. Nothing floats.
+   ====================================================================== */
+
+/* faces (bundled locally — the app stays fully offline) */
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;src:url('/fonts/plexmono-400.woff2') format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;src:url('/fonts/plexmono-500.woff2') format('woff2')}
+@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:600;src:url('/fonts/plexmono-600.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:400;src:url('/fonts/insans-400.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:500;src:url('/fonts/insans-500.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:600;src:url('/fonts/insans-600.woff2') format('woff2')}
+@font-face{font-family:'Instrument Sans';font-style:normal;font-weight:700;src:url('/fonts/insans-700.woff2') format('woff2')}
+@font-face{font-family:'Instrument Serif';font-style:italic;font-weight:400;src:url('/fonts/inserif-400i.woff2') format('woff2')}
+@font-face{font-family:'Instrument Serif';font-style:normal;font-weight:400;src:url('/fonts/inserif-400.woff2') format('woff2')}
+:root, .theme-ink {
+  --bg0:#07080B; --bg1:#0B0D11; --bg2:#161B22; --bg3:#1B212A;
+  --tx:#EEF0F4; --tx2:#A6ADBA; --tx3:#5A6270;
+  --brand:#6D78F5; --brand-hi:#AAB0FF; --brand-ink:#FFFFFF;
+  --ok:#45D691; --warn:#F0B13D; --err:#FF6076;
+  --ok-dim:rgba(69,214,145,.12); --warn-dim:rgba(240,177,61,.12);
+  --err-dim:rgba(255,96,118,.12); --brand-dim:rgba(109,120,245,.14);
+  --hair:rgba(255,255,255,.07); --hair2:rgba(255,255,255,.14);
+  --paper:#F7F3EA; --paper-deep:#EAE3D4; --mark:#23262B;
+  --vermilion:#FF5C38;
+}
+.theme-day {
+  --bg0:#E9ECEF; --bg1:#F4F6F8; --bg2:#FFFFFF; --bg3:#E4E8ED;
+  --tx:#14181F; --tx2:#4A5361; --tx3:#8B94A3;
+  --brand:#515BD6; --brand-hi:#3D47B8; --brand-ink:#FFFFFF;
+  --ok:#1E9E5A; --warn:#B8860B; --err:#D14358;
+  --ok-dim:rgba(30,158,90,.10); --warn-dim:rgba(184,134,11,.10);
+  --err-dim:rgba(209,67,88,.10); --brand-dim:rgba(81,91,214,.10);
+  --hair:rgba(20,24,31,.09); --hair2:rgba(20,24,31,.17);
+  --paper:#FFFDF7; --paper-deep:#F1EBDD; --mark:#23262B;
+  --vermilion:#E8431D;
+}
+
+html,body,#root{height:100%}
+body{background:var(--bg0);color:var(--tx);-webkit-font-smoothing:antialiased;
+  font-feature-settings:'tnum' 1}
+::selection{background:var(--brand);color:var(--brand-ink)}
+*{scrollbar-width:thin;scrollbar-color:var(--bg3) transparent}
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:99px}
+
+/* ================= surfaces ================= */
+.panel{position:relative;background:var(--bg1);border:1px solid var(--hair);
+  border-radius:12px}
+.panel.grain::after{content:'';position:absolute;inset:0;border-radius:inherit;
+  pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E")}
+/* the sheet artifact — the only thing allowed a shadow */
+.sheet{background:var(--paper);border:1px solid var(--paper-deep);
+  box-shadow:0 1px 2px rgba(0,0,0,.5),0 12px 32px rgba(0,0,0,.45)}
+
+/* ================= states ================= */
+.focusable{transition:box-shadow .15s,border-color .15s,background .15s,
+  color .15s,transform .08s}
+.focusable:focus-visible{outline:none;
+  box-shadow:0 0 0 1px var(--bg0),0 0 0 3px var(--brand)}
+@media (hover:hover){
+  .hov:hover{background:var(--bg2)}
+  .btn-hov:hover{background:var(--brand-hi)}
+  .tile:hover{transform:translateY(-1px) scale(1.01)}
+}
+.btn-hov:active:not(:disabled){transform:translateY(0) scale(.99)}
+button:disabled,.disabled{opacity:.4;pointer-events:none}
+.tnum{font-variant-numeric:tabular-nums}
+
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.skeleton{background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 45%,var(--bg2) 65%);
+  background-size:200% 100%;animation:shimmer 1.3s linear infinite;border-radius:8px}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}
+.livedot{animation:pulse-dot 1.8s ease-in-out infinite}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(240%)}}
+
+/* ============ motifs ============ */
+/* registration mark — 9px crosshair, precedes eyebrows, is the logo */
+.regmark{position:relative;padding-left:15px}
+.regmark::before{content:'';position:absolute;left:2px;top:50%;width:9px;height:9px;
+  transform:translateY(-50%);
+  background:
+   linear-gradient(var(--tx3),var(--tx3)) center/9px 1px no-repeat,
+   linear-gradient(var(--tx3),var(--tx3)) center/1px 9px no-repeat;
+  border-radius:1px}
+.regmark-iris::before{
+  background:
+   linear-gradient(var(--brand),var(--brand)) center/9px 1px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) center/1px 9px no-repeat}
+/* corner brackets — the four machine-vision anchors */
+.brackets{position:relative}
+.brackets::after{content:'';position:absolute;inset:-6px;pointer-events:none;
+  background:
+   linear-gradient(var(--brand),var(--brand)) left top/14px 2px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) left top/2px 14px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) right top/14px 2px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) right top/2px 14px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) left bottom/14px 2px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) left bottom/2px 14px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) right bottom/14px 2px no-repeat,
+   linear-gradient(var(--brand),var(--brand)) right bottom/2px 14px no-repeat}
+/* the pen ring — vermilion ellipse with a tail, on disputed bubbles */
+.penring{position:relative}
+.penring::after{content:'';position:absolute;left:50%;top:50%;width:74%;height:58%;
+  transform:translate(-50%,-50%) rotate(-6deg);border:2px solid var(--vermilion);
+  border-radius:50%;pointer-events:none;
+  mask-image:radial-gradient(circle at 78% 20%,transparent 58%,#000 60%)}
+.penline{color:var(--vermilion)}
+
+kbd{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10px;
+  background:var(--bg3);border:1px solid var(--hair2);border-bottom-width:2px;
+  border-radius:6px;padding:1px 5px;color:var(--tx2)}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}

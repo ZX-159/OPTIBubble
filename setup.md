@@ -40,11 +40,14 @@ by the Python engine.
 git clone https://github.com/<you>/OPTIBubble.git
 cd OPTIBubble
 
+# front-end (Node 18+): build the React SPA once — the engine serves the result
+cd frontend && npm install && npm run build && cd ..
+
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 63/63 checks passed · ALL GREEN
+python selftest.py                 # expect: 75/75 checks passed · ALL GREEN
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -80,7 +83,7 @@ gh repo create OPTIBubble --public --source=. --push
 ```
 
 `.gitignore` already excludes runtime data (`OPTIBubbleData/`), caches and Rust
-build outputs. Verify with `git status` that **no student data** is committed.
+build outputs. Verify with `git status` that **no personal data** is committed.
 
 ## 4 · Building locally
 
@@ -136,11 +139,11 @@ context* — there is no JavaScript workaround. The realistic options, ranked:
 | Approach | Student friction | Needs internet? | Verdict |
 |---|---|---|---|
 | **Trusted cert via Let's Encrypt DNS-01 + free DuckDNS domain** (built in: Settings → HTTPS mode → *Trusted*) | **none** — camera works in every browser, one QR scan | once at issuance (auto-renews ~30 days before expiry) | ✅ best UX — the Home Assistant pattern for local HTTPS |
-| Built-in local CA + code A install (built in, offline mode) | iOS: install profile + trust toggle (once). Android: Firefox or fallback | never | ✅ keep for fully offline classrooms |
+| Built-in local CA + code A install (built in, offline mode) | iOS: install profile + trust toggle (once). Android: Firefox or fallback | never | ✅ keep for fully offline networks |
 | Native-camera fallback (upload button) | none, but no live viewfinder | never | ✅ always available, automatic |
 | `chrome://flags` unsafely-treat-origin-as-secure | per-device flag fiddling | never | ❌ worse than a certificate |
 | ngrok / cloud tunnels | none | always on, traffic leaves the LAN | ❌ violates the no-cloud posture |
-| USB port-forward to `localhost` | cable + dev tools | never | ❌ not classroom-scale |
+| USB port-forward to `localhost` | cable + dev tools | never | ❌ not practical at scale |
 
 #### How Trusted HTTPS mode actually works
 
@@ -168,7 +171,7 @@ real one from Let's Encrypt, for a name **you** own (a free
 
 **Why no router changes:** DNS-01 proves domain ownership through the TXT
 record alone; Let's Encrypt never connects to your PC. Nothing is forwarded,
-nothing is reachable from outside, and the classroom traffic itself never
+nothing is reachable from outside, and the scan traffic itself never
 leaves the Wi-Fi — only the one-time issuance and the ~quarterly renewal
 touch the internet.
 
@@ -193,14 +196,14 @@ update it once at duckdns.org (no new certificate needed; the cert is for the
 3. Done. The Scan & Serve page now shows a **single “Scan to grade” QR code**
    at `https://myclass.duckdns.org:5443/…` with a
    *Trusted HTTPS · myclass.duckdns.org* status chip; the certificate-install
-   code disappears because students don't need it.
+   code disappears — it isn't needed.
 
 If anything is wrong, the wizard stops at the failing step with a plain-language
 fix — e.g. *“myclass.duckdns.org points at 84.x.x.x, but this PC is
 192.168.0.15 — open duckdns.org, set the IP to 192.168.0.15, press Start
 again”*. Nothing to interpret, nothing to restart.
 
-**Verify it worked:** open the QR-B URL on any phone (or the teacher PC) —
+**Verify it worked:** open the QR-B URL on any phone (or this PC) —
 the padlock is clean with no warnings and the scanner shows the
 “🔒 Secure camera” chip. If anything fails, the log names the step (bad token,
 unreachable duckdns.org, propagation timeout) and the system simply keeps
@@ -209,7 +212,7 @@ running the Local-CA HTTPS + HTTP fallbacks — nothing breaks.
 **Security notes:** the DuckDNS token is stored in plain text in
 `settings.json` (it can only update *your* subdomain's IP/TXT records — keep
 the file private anyway); the certificate key lives in `<data>/certs/`;
-and students' phones never need the token or any configuration.
+and phones never need the token or any configuration.
 
 ### 4.6 · Bundling — installers ship the whole engine (no Python needed)
 
@@ -314,7 +317,7 @@ permissions:
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (63 checks)
+    name: Self-test (75 checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -323,6 +326,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the React SPA
+        run: cd frontend && npm install --no-audit --no-fund && npm run build
 
       - name: Install engine dependencies
         run: pip install -r requirements.txt
@@ -456,9 +466,9 @@ inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
 
 ## 8 · Version bumping checklist
 
-- [ ] `optibubble/__init__.py` → `__version__`
-- [ ] `src-tauri/tauri.conf.json` → `version`
-- [ ] `src-tauri/Cargo.toml` → `version` (+ `cargo update -p optibubble`)
+- [ ] `python tools/sync_version.py X.Y.Z` (updates every manifest at once;
+      the self-test fails CI if they ever drift)
+- [ ] `cd src-tauri && cargo update -p optibubble`
 - [ ] new `<release>` entry in `packaging/flatpak/com.optibubble.app.metainfo.xml`
 - [ ] commit → `git tag vX.Y.Z` → `git push --tags` → publish the draft release
 

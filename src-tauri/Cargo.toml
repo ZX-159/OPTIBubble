@@ -1,6 +1,6 @@
 [package]
 name = "optibubble"
-version = "1.4.1"
+version = "1.9.1"
 description = "OPTIBubble — local OMR & mobile-bridge grading system"
 authors = ["OPTIBubble contributors"]
 license = "GPL-3.0"

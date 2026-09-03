@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OPTIBubble",
-  "version": "1.4.1",
+  "version": "1.9.1",
   "identifier": "com.optibubble.app",
   "build": {
     "frontendDist": "../optibubble/web"

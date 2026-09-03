@@ -150,6 +150,24 @@
               <span class="hint">Comma-separated lines students fill by hand —
                 the scanner ignores them. Leave empty for none (max 6).</span></div>
           </div>
+          <div class="card" style="margin-bottom:14px">
+            <h3>Scoring</h3>
+            <p class="sub">Points per question and partial-credit policy.</p>
+            <div class="field"><label>Default points per question</label>
+              <input type="number" id="fDefaultPts" min="0.1" max="100" step="0.5" value="1"></div>
+            <div class="field"><label>Critical questions worth more</label>
+              <input type="text" id="fWeights" placeholder="e.g. 5:2, 9-12:3" spellcheck="false">
+              <span class="hint">Ranges and single questions · Q#:points.</span></div>
+            <div class="field"><label>Partial credit for double-marks containing the key</label>
+              <div class="seg" id="fPartial">
+                <button data-v="0" class="active">Off</button>
+                <button data-v="0.25">¼</button>
+                <button data-v="0.5">½</button>
+                <button data-v="1">Full</button>
+              </div>
+              <span class="hint">Off sends double-marks to review; credit
+                auto-awards the fraction without review.</span></div>
+          </div>
           <div class="card">
             <h3>Preview</h3>
             <p class="sub">Rendered live from the generated sheet — appears after
@@ -205,6 +223,33 @@
           <span class="hint">You can print and scan now — grading scores the
             questions that already have a key.</span>
         </div>
+        <div class="card" id="deskCamCard">
+          <h3><i data-icon="camera"></i>Desktop camera <span class="badge info">USB doc cam</span></h3>
+          <p class="sub">Plug a USB document camera or webcam into this PC —
+             no phone needed. Lay the sheet flat and click grade.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <select id="camSel" style="max-width:170px"><option value="0">Camera 0</option></select>
+            <button class="btn sm ghost" id="camRefresh"><i data-icon="refresh"></i>Detect</button>
+            <button class="btn sm" id="camStart"><i data-icon="camera"></i>Start</button>
+            <button class="btn sm ghost" id="camStop" style="display:none">Stop</button>
+          </div>
+          <div id="camPreviewWrap" style="display:none; margin-top:10px">
+            <img id="camPreview" alt="camera frame" style="width:100%;
+              border-radius:5px; border:1px solid var(--hair2); background:#000">
+            <button class="btn ok" id="camGrade" style="width:100%; margin-top:8px">
+              <i data-icon="check"></i>Capture &amp; grade this sheet</button>
+            <span class="hint">Hold the sheet still — grading takes the current frame.</span>
+          </div>
+        </div>
+        <div class="card" id="monitorCard">
+          <h3><i data-icon="eye"></i>Phone mirror <span class="badge info">WebRTC</span></h3>
+          <p class="sub">Students' phones can mirror their live viewfinder here —
+             check framing on the big screen while they scan.</p>
+          <button class="btn sm" id="mirrorBtn"><i data-icon="scan"></i>Start monitoring</button>
+          <video id="mirrorVideo" autoplay muted playsinline style="width:100%;
+            margin-top:10px; border-radius:5px; background:#000; display:none"></video>
+          <span class="hint" id="mirrorHint">Then on the phone camera view, tap the mirror button.</span>
+        </div>
         <div class="card">
           <h3>Live activity</h3>
           <p class="sub">Photos arrive over your Wi-Fi and are graded locally in &lt;150 ms.</p>
@@ -230,6 +275,15 @@
 
     <!-- ============================ RESULTS ============================ -->
     <section class="page" id="page-results">
+      <div class="card" id="analyticsCard" style="margin-bottom:14px">
+        <div class="restop">
+          <h3>Analytics</h3>
+          <span class="badge ok" id="kr20Badge">—</span>
+          <span class="muted" id="analyticsMeta" style="font-size:11.5px"></span>
+        </div>
+        <div id="analyticsBody" class="muted" style="font-size:12.5px">
+          Grade a few sheets to see reliability statistics.</div>
+      </div>
       <div class="card">
         <div class="restop">
           <h3>Results</h3>
@@ -319,7 +373,9 @@
             <div style="display:flex; gap:8px; flex-wrap:wrap">
               <button class="btn sm ghost" id="resetSettings">Reset to defaults</button>
               <button class="btn sm ghost" id="runSelftest"><i data-icon="check"></i>Run self-test</button>
+              <button class="btn sm ghost" id="restoreBtn"><i data-icon="download"></i>Restore archive</button>
             </div>
+            <input type="file" id="restoreFile" accept=".optibubble,.zip" style="display:none">
             <pre id="selftestOut" class="mono" style="display:none;margin-top:10px;
   background:var(--bg0);border:1px solid var(--hair);border-radius:4px;
   padding:10px;font-size:10.5px;max-height:220px;overflow:auto;white-space:pre-wrap"></pre>

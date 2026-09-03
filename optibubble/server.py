@@ -49,6 +49,14 @@ def _web_path(sub: str, name: str) -> Path:
     return p
 
 
+def parse_weights_safe(text):
+    from .config import TestConfig
+    try:
+        return TestConfig.parse_weights_text(text or "")
+    except ValueError:
+        return {}
+
+
 def create_app(hub: Hub) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
@@ -150,13 +158,40 @@ def create_app(hub: Hub) -> Flask:
                          download_name="OPTIBubble-CA.mobileconfig")
 
     # ----------------------------------------------------------- pages
+    # ------------------------------------------------------- React SPA ----
+    _DIST = WEB_DIR / "dist"
+
+    def _spa(route: str = "app"):
+        """Serve the React bundle with a deterministic route marker injected —
+        the client must never guess its route from the URL (mobile browsers
+        normalise/restore pages unpredictably)."""
+        p = _DIST / "index.html"
+        if p.exists():
+            html = p.read_text(encoding="utf-8")
+            marker = f"<script>window.__OB_ROUTE__={route!r};</script>"
+            html = html.replace("<head>", f"<head>{marker}", 1)
+            return Response(html, mimetype="text/html")
+        # No React build available → serve the matching LEGACY page.  A scan
+        # link must NEVER fall back to the desktop dashboard.
+        fallback = "scan.html" if route == "scanner" else "app.html"
+        return send_file(_web_path("", fallback))
+
     @app.route("/")
     def index():
-        return send_file(_web_path("", "app.html"))
+        return _spa("app")
 
     @app.route("/scan/<token>")
     def scan(token: str):
-        return send_file(_web_path("", "scan.html"))
+        return _spa("scanner")
+
+    @app.route("/app/<path:name>")
+    def spa_assets(name: str):
+        p = (_DIST / name).resolve()
+        if not str(p).startswith(str(_DIST.resolve())) or not p.exists():
+            abort(404)
+        mime = ("text/javascript" if name.endswith((".js", ".mjs"))
+                else "text/css" if name.endswith(".css") else None)
+        return send_file(p, mimetype=mime, conditional=True)
 
     @app.route("/api/selftest", methods=["POST"])
     def run_selftest():
@@ -251,6 +286,9 @@ def create_app(hub: Hub) -> Flask:
             page_size=(d.get("page_size") or "a4").lower(),
             sheet_instructions=d.get("sheet_instructions", "")[:240],
             write_in_fields=d.get("write_in_fields", "Name,Class,Date"),
+            default_points=float(d.get("default_points", 1.0) or 1.0),
+            partial_multi_credit=float(d.get("partial_multi_credit", 0.0) or 0.0),
+            weights=parse_weights_safe(d.get("weights_text", "")),
             header_font_scale=float(d.get("header_font_scale", 1.0) or 1.0),
             logo_position=d.get("logo_position", "left"),
             answer_key={int(q): a for q, a in (d.get("answer_key") or {}).items()})
@@ -298,6 +336,95 @@ def create_app(hub: Hub) -> Flask:
     def delete_test(test_id: str):
         ok, msg = hub.delete_test(test_id)
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 404)
+
+    @app.route("/api/tests/<test_id>/archive", methods=["POST"])
+    def archive_test(test_id: str):
+        from .archive import create_archive
+        d = request.get_json(silent=True) or {}
+        pw = d.get("password") or ""
+        if pw and len(pw) < 4:
+            return jsonify({"error": "Use a password of 4+ characters "
+                                     "(or leave it empty for no encryption)."}), 400
+        from .config import tests_dir as _td
+        root = _td(hub.data_dir) / test_id
+        if not root.exists():
+            return jsonify({"error": "not found"}), 404
+        blob = create_archive(root, pw)
+        return Response(blob, mimetype="application/octet-stream",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename={test_id}.optibubble"})
+
+    @app.route("/api/archive/restore", methods=["POST"])
+    def restore_test():
+        from .archive import restore_archive
+        from .config import tests_dir as _td
+        f = request.files.get("file")
+        pw = request.form.get("password") or ""
+        if not f:
+            return jsonify({"error": "no file"}), 400
+        data = f.read()
+        if data[:5] == b"OBAR1" and not pw:
+            return jsonify({"error": "This archive is encrypted — enter its "
+                                     "password."}), 400
+        try:
+            test_id, n = restore_archive(data, pw, _td(hub.data_dir))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        hub.log(f"Test {test_id} restored from archive ({n} files)")
+        return jsonify({"ok": True, "test_id": test_id, "files": n})
+
+    # ------------------------------------------------ desktop USB camera ----
+    @app.route("/api/camera/devices")
+    def camera_devices():
+        return jsonify(hub.camera_devices())
+
+    @app.route("/api/camera/start", methods=["POST"])
+    def camera_start():
+        d = request.get_json(silent=True) or {}
+        ok, msg = hub.camera_start(d.get("index", 0), d.get("synthetic"))
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+    @app.route("/api/camera/stop", methods=["POST"])
+    def camera_stop():
+        hub.camera_stop()
+        return jsonify({"ok": True})
+
+    @app.route("/api/camera/frame.jpg")
+    def camera_frame():
+        jpg = hub.camera_frame_jpeg()
+        if not jpg:
+            abort(404)
+        return Response(jpg, mimetype="image/jpeg")
+
+    @app.route("/api/camera/grade", methods=["POST"])
+    def camera_grade():
+        if not hub.test:
+            return jsonify({"error": {"code": "NO_TEST",
+                                      "message": "Create or open a test first."}}), 400
+        jpg = hub.camera_frame_jpeg()
+        if not jpg:
+            return jsonify({"error": {"code": "NO_CAMERA",
+                                      "message": "The camera has no frame yet."}}), 400
+        rid, err = hub.accept_upload(hub.test.session_token, jpg)
+        if err:
+            return jsonify({"error": err}), 400
+        return jsonify({"receipt": rid})
+
+    # -------------------------------------------- WebRTC mirror signaling ---
+    @app.route("/api/mirror/<slot>", methods=["GET", "POST", "DELETE"])
+    def mirror_signal(slot: str):
+        if slot not in ("offer", "answer", "bye"):
+            abort(404)
+        if request.method == "POST":
+            hub.mirror_post(slot, request.get_json(silent=True) or {})
+            return jsonify({"ok": True})
+        if request.method == "DELETE":
+            hub.mirror_post(slot, None)
+            return jsonify({"ok": True})
+        item = hub.mirror_get(slot)
+        if not item:
+            return jsonify({"payload": None})
+        return jsonify(item)
 
     @app.route("/api/tests/<test_id>/open", methods=["POST"])
     def open_test(test_id: str):
@@ -380,6 +507,58 @@ def create_app(hub: Hub) -> Flask:
         d = request.get_json(silent=True) or {}
         ok = hub.discard_flagged(d.get("sheet_id", ""))
         return jsonify({"ok": ok}), (200 if ok else 404)
+
+    @app.route("/api/analytics")
+    def analytics():
+        """Psychometrics for the active test: error rates, discrimination
+        (point-biserial), KR-20 reliability."""
+        import json as _json
+        import math as _math
+        if not hub.test:
+            return jsonify({"error": "no active test"}), 404
+        rows = hub.storage.read_results(hub.test)
+        sheets = []
+        for r in rows:
+            try:
+                d = _json.loads(r.get("Detailed_Answers_JSON") or "{}")
+                sheets.append(d.get("correct") or {})
+            except Exception:
+                pass
+        n = len(sheets)
+        nq = hub.test.num_questions
+        qs = [q for q in range(1, nq + 1)
+              if any(str(q) in s for s in sheets)]
+        if n < 2 or not qs:
+            return jsonify({"n": n, "kr20": None, "questions": [],
+                            "note": "needs at least 2 graded sheets"})
+        totals = [sum(1.0 for q in qs if s.get(str(q))) for s in sheets]
+        mean = sum(totals) / n
+        var = sum((t - mean) ** 2 for t in totals) / n
+        qstat = []
+        sum_pq = 0.0
+        for q in qs:
+            p = sum(1.0 for s in sheets if s.get(str(q))) / n
+            sum_pq += p * (1 - p)
+            # point-biserial: item score vs total score
+            m1 = sum(t for t, s in zip(totals, sheets) if s.get(str(q))) / \
+                 max(1, sum(1 for s in sheets if s.get(str(q))))
+            m0 = sum(t for t, s in zip(totals, sheets) if not s.get(str(q))) / \
+                 max(1, sum(1 for s in sheets if not s.get(str(q))))
+            rpb = ((m1 - m0) * _math.sqrt(p * (1 - p)) / _math.sqrt(var)
+                    if var > 0 else 0.0)
+            qstat.append({"q": q, "p_correct": round(p, 3),
+                          "error_rate": round(1 - p, 3),
+                          "discrimination": round(rpb, 3),
+                          "points": hub.test.weight_for(q)})
+        k = len(qs)
+        kr20 = (k / (k - 1)) * (1 - sum_pq / var) if k > 1 and var > 0 else None
+        sorted_t = sorted(totals)
+        median = (sorted_t[n // 2] if n % 2 else
+                  (sorted_t[n // 2 - 1] + sorted_t[n // 2]) / 2)
+        return jsonify({
+            "n": n, "k": k, "kr20": round(kr20, 3) if kr20 is not None else None,
+            "mean": round(mean, 2), "median": median,
+            "stdev": round(_math.sqrt(var), 2), "questions": qstat})
 
     @app.route("/api/results")
     def results():
@@ -480,7 +659,7 @@ def create_app(hub: Hub) -> Flask:
 
 
 def _cert_landing(hub) -> str:
-    https = hub.https_url() or "https://<teacher-ip>:" + str(hub.settings.https_port)
+    https = hub.https_url() or "https://<this-pc>:" + str(hub.settings.https_port)
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Enable the live camera — OPTIBubble</title>
@@ -498,8 +677,8 @@ ol{{padding-left:20px;color:#A3A6B1}} ol b{{color:#EAEBEF}}
 </style></head><body><main>
 <p style="letter-spacing:.18em;font-size:10px;color:#686C79;font-weight:800">OPTIBubble · Secure Camera</p>
 <h1>Unlock the live viewfinder</h1>
-<p style="color:#A3A6B1">Your browser only allows in-page cameras on secure
-connections. Install the teacher's local certificate once — it takes under a
+<p style="color:#A3A6B1">This browser only allows in-page cameras on secure
+connections. Install this computer's local certificate once — it takes under a
 minute — then every future scan opens the live camera automatically.</p>
 
 <div class="step"><b>iPhone / iPad</b>
@@ -514,8 +693,8 @@ minute — then every future scan opens the live camera automatically.</p>
 <div class="step"><b>Android</b>
   <ol><li>Download the certificate below.</li>
       <li>Settings → <b>Security</b> → <b>Install a certificate</b> → <b>CA certificate</b>
-          → pick <b>OPTIBubble-CA.crt</b> (looks scary; it is your teacher's own
-          classroom server).</li>
+          → pick <b>OPTIBubble-CA.crt</b> (it belongs to the computer
+          serving this page).</li>
       <li>Chrome may still refuse user CAs — if the camera stays black, use
           <b>Firefox</b> (honours user certificates) or the 🖼️ upload button,
           which always works.</li></ol>
@@ -524,7 +703,7 @@ minute — then every future scan opens the live camera automatically.</p>
 
 <div class="step"><b>Done?</b> Scan the second QR code (white card, “live camera”)
 or open:<br><code style="color:#FF7448;word-break:break-all">{https}</code>
-<small>Only devices on this classroom Wi-Fi can reach this server. Removing the
+<small>Only devices on this local Wi-Fi can reach this server. Removing the
 certificate after class: Settings → Profiles / credential storage.</small>
 </div>
 </main></body></html>"""

@@ -118,6 +118,7 @@ class Storage:
             "confidence": round(r.confidence, 4),
             "sheet_id": r.sheet_id,
             "reviewed": r.status == "verified",
+            "partials": getattr(r, "partials", []),
         }
         pct = round(100.0 * r.score / r.max_score, 1) if r.max_score else 0.0
         return {
@@ -210,6 +211,7 @@ def _result_to_json(r: GradeResult) -> dict:
         "status": r.status,
         "flags": [{"kind": f.kind, "q": f.q, "digit": f.digit, "guess": f.guess,
                    "message": f.message, "crop": f.crop} for f in r.flags],
+        "partials": getattr(r, "partials", []),
         "duration_ms": r.duration_ms,
     }
 
@@ -221,6 +223,7 @@ def result_from_json(d: dict) -> GradeResult:
         answers={int(k): v for k, v in d.get("answers", {}).items()},
         correct={int(k): v for k, v in d.get("correct", {}).items()},
         score=d.get("score", 0), max_score=d.get("max_score", 0),
+        partials=d.get("partials", []) or [],
         confidence=d.get("confidence", 1.0),
         flags=[Flag(**f) for f in d.get("flags", [])],
         status=d.get("status", "auto"),

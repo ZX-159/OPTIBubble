@@ -294,6 +294,36 @@ def main() -> int:
     r = client.get("/")
     check("desktop app page served", r.status_code == 200 and b"OPTIBubble" in r.data)
 
+    # ---- port fallback: busy port must not dead-end the app ---------------
+    import socket as _sock
+    _h2 = Hub(data_dir=tmp / "hub_ports")
+    _block = _sock.socket()
+    _block.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+    _block.bind(("0.0.0.0", _h2.settings.port))
+    _block.listen(1)
+    try:
+        ok_fb = _h2.start_server()
+        check("busy HTTP port auto-falls back to the next free port",
+              ok_fb and _h2.server_running and _h2.settings.port != 5000,
+              f"port {_h2.settings.port}")
+    finally:
+        _h2.stop_server()
+        _block.close()
+
+    # ---- route isolation: a scan link must NEVER serve the dashboard ------
+    r_scan = client.get("/scan/unknown-token")
+    scan_html = r_scan.data.decode()
+    dist_present = "index-" in scan_html and "root" in scan_html
+    if dist_present:
+        check("scan link routes to the scanner (SPA marker)",
+              "__OB_ROUTE__='scanner'" in scan_html)
+    else:  # no React build → vanilla fallback must still be the scanner page
+        check("scan link routes to the scanner (vanilla fallback)",
+              "fileInput" in scan_html and "Dashboard" not in scan_html)
+    r_root = client.get("/")
+    check("root routes to the app (never the scanner)",
+          b"shutterBtn" not in r_root.data or dist_present)
+
     # ---- UI shell integrity (a stray </div> once broke the whole layout) ----
     from html.parser import HTMLParser as _HP
 
@@ -309,13 +339,18 @@ def main() -> int:
     _p = _Chk(); _p.feed(r.data.decode())
     check("app shell HTML is balanced", not _p.errs and not _p.stack,
           str(_p.errs[:3] or _p.stack[:3]))
+    # React SPA: built bundle exists and every asset it references is served
     import re as _re2
-    _ids_html = set(_re2.findall(r'id="([^"]+)"', r.data.decode()))
-    _js = (Path(__file__).parent / "optibubble" / "web" / "app.js").read_text()
-    _dyn = set(_re2.findall(r'id="([A-Za-z0-9_]+)"', _js))  # ids built at runtime
-    _missing = sorted(i for i in set(_re2.findall(r'\$\("([A-Za-z0-9_]+)"\)', _js))
-                      if i not in _ids_html and i not in _dyn)
-    check("JS element ids all resolve", not _missing, str(_missing[:5]))
+    _dist = Path(__file__).parent / "optibubble" / "web" / "dist"
+    check("React SPA bundle present", (_dist / "index.html").exists()
+          and any(_dist.glob("index-*.js")) and any(_dist.glob("index-*.css")))
+    for m in _re2.findall(r'(?:src|href)="(/app/[^"]+)"', r.data.decode()):
+        ra = client.get(m)
+        if not (ra.status_code == 200 and len(ra.data) > 500):
+            check(f"SPA asset {m} served", False, str(ra.status_code))
+            break
+    else:
+        check("SPA assets all served (js+css)", True)
     r = client.get("/api/state")
     check("state snapshot", r.status_code == 200 and r.get_json()["test"] is not None)
     r = client.get("/api/settings")
@@ -657,6 +692,154 @@ def main() -> int:
           ok_del and r2.status_code == 200 and live == 200
           and hub.test is None,
           f"http={live}, state={r2.status_code}")
+
+    # ---- version references stay in sync (tools/sync_version.py) ----------
+    import json as _json2
+    from optibubble import __version__ as _ver
+    _conf = _json2.loads((Path(__file__).parent / "src-tauri" /
+                          "tauri.conf.json").read_text())
+    _cargo = (Path(__file__).parent / "src-tauri" / "Cargo.toml").read_text()
+    _lock = (Path(__file__).parent / "src-tauri" / "Cargo.lock").read_text()
+    check("version references in sync",
+          _conf["version"] == _ver
+          and f'version = "{_ver}"' in _cargo
+          and f'name = "optibubble"\nversion = "{_ver}"' in _lock, _ver)
+
+    # ---- v1.6 features -----------------------------------------------------
+    # weighted scoring + partial credit
+    from optibubble.config import TestConfig as _TC
+    tw = _TC(title="Weighted", num_questions=6, options_per_question=4,
+             student_id_digits=0)
+    tw.ensure_ids()
+    tw.answer_key = {i: "ABCD"[(i - 1) % 4] for i in range(1, 7)}
+    tw.weights = {5: 3.0, 6: 2.0}
+    pdfw, layw = generate_sheet_pdf(tw, tmp / "weighted.pdf")
+    flatw = render_pdf(pdfw)
+    mmw = flatw.shape[1] / layw.page_w
+    for qn, l in tw.answer_key.items():
+        if qn == 3: continue
+        b = [bb for bb in layw.bubbles if bb.kind == "option" and bb.q == qn][
+            "ABCD".index(l)]
+        fill_bubble(flatw, mmw, b.cx, b.cy, b.r, "pen")
+    # Q3: double-mark containing the key → partial credit
+    b3a = [bb for bb in layw.bubbles if bb.kind == "option" and bb.q == 3][2]
+    b3b = [bb for bb in layw.bubbles if bb.kind == "option" and bb.q == 3][0]
+    fill_bubble(flatw, mmw, b3a.cx, b3a.cy, b3a.r, "pen")
+    fill_bubble(flatw, mmw, b3b.cx, b3b.cy, b3b.r, "pen")
+    tw.partial_multi_credit = 0.5
+    rw = grade_photo(encode_jpeg(simulate_photo(flatw, layw, seed=6)),
+                     layw, tw, settings, tmp)
+    check("weighted scoring + ½ partial credit for key-containing double",
+          abs(rw.max_score - 9.0) < 1e-6 and abs(rw.score - 8.5) < 1e-6
+          and rw.status == "auto" and rw.partials == [3],
+          f"{rw.score}/{rw.max_score} partials={rw.partials}")
+
+    # analytics: KR-20 with a known-perfect separation → 1.0
+    hub.settings.partial_multi_credit = 0
+    from optibubble.server import create_app as _caf
+    _c2 = _caf(hub).test_client()
+    tA = _TC(title="Psych", num_questions=5, options_per_question=4,
+             student_id_digits=5)
+    tA.ensure_ids()
+    tA.answer_key = {i: "A" for i in range(1, 6)}
+    hub.create_test(tA, generate_pdf=False)
+    pdfA, layA = generate_sheet_pdf(tA, hub.storage.test_root(tA) / "sheet.pdf")
+    flatA = render_pdf(pdfA)
+    mmA = flatA.shape[1] / layA.page_w
+    profiles = [(["A"] * 5, "10001"), (["A"] * 3 + ["B", "B"], "10002"),
+                (["B"] * 5, "10003"), (["A", "A", "B", "B", "A"], "10004")]
+    for answers, sid in profiles:
+        imgA = flatA.copy()
+        for qn, l in enumerate(answers, 1):
+            b = [bb for bb in layA.bubbles if bb.kind == "option" and bb.q == qn][
+                "ABCD".index(l)]
+            fill_bubble(imgA, mmA, b.cx, b.cy, b.r, "pen")
+        for d, ch in enumerate(sid):
+            bb = layA.digit_bubbles(d)[int(ch)]
+            fill_bubble(imgA, mmA, bb.cx, bb.cy, bb.r, "pen")
+        hub._process("psy-" + sid, encode_jpeg(simulate_photo(imgA, layA, seed=7)))
+    an = _c2.get("/api/analytics").get_json()
+    # oracle: recompute KR-20 from the same stored data
+    import math as _mth
+    tots, items = [], {q: [] for q in range(1, 6)}
+    for _, l in [(10001, [1]*5), (10002, [1, 1, 1, 0, 0]),
+                 (10003, [0]*5), (10004, [1, 1, 0, 0, 1])]:
+        tots.append(sum(l))
+        for q in range(1, 6):
+            items[q].append(l[q - 1])
+    n_ = 4
+    mu = sum(tots) / n_
+    var = sum((x - mu) ** 2 for x in tots) / n_
+    spq = sum((sum(v) / n_) * (1 - sum(v) / n_) for v in items.values())
+    kr_exp = (5 / 4) * (1 - spq / var)
+    check("analytics: KR-20 + discrimination computed",
+          an["n"] == 4 and an["kr20"] is not None
+          and abs(an["kr20"] - kr_exp) < 0.002
+          and len(an["questions"]) == 5
+          and any(q["discrimination"] > 0.5 for q in an["questions"]),
+          f"kr20={an['kr20']} expected={kr_exp:.3f} n={an['n']}")
+
+    # archive round-trip
+    from optibubble.archive import create_archive, restore_archive
+    from optibubble.config import tests_dir as _td3
+    src_root = _td3(hub.data_dir) / tA.test_id
+    blob = create_archive(src_root, "pass1234")
+    check("archive: encrypted container round-trips",
+          blob[:5] == b"OBAR1" and len(blob) > 1000)
+    (tmp / "arch").mkdir(exist_ok=True)
+    tid, nfiles = restore_archive(blob, "pass1234", tmp / "arch")
+    check("archive: restore decrypts all files",
+          tid == tA.test_id and (tmp / "arch" / tid / "test.json").exists())
+    try:
+        restore_archive(blob, "WRONG", tmp / "arch2")
+        check("archive: wrong password rejected", False)
+    except ValueError:
+        check("archive: wrong password rejected", True)
+
+    # plain (passwordless) archive format v2
+    blob2 = create_archive(src_root, "")
+    ok2 = blob2[:5] == b"OBAR2"
+    (tmp / "arch3").mkdir(exist_ok=True)
+    try:
+        tid2, nf2 = restore_archive(blob2, "", tmp / "arch3")
+        ok2 = ok2 and tid2 == tA.test_id and (tmp / "arch3" / tid2 /
+                                              "test.json").exists()
+    except ValueError:
+        ok2 = False
+    check("archive: passwordless export/import (v2)", ok2)
+    # collision guard still friendly
+    try:
+        restore_archive(blob2, "", tmp / "arch3")
+        check("archive: name collision guarded", False)
+    except ValueError as e:
+        check("archive: name collision guarded", "already exists" in str(e))
+
+    # restore endpoint: encrypted archive without password → clear error
+    from io import BytesIO as _BIO
+    enc_blob = create_archive(src_root, "pass1234")
+    r = client.post("/api/archive/restore",
+                    data={"file": (_BIO(enc_blob), "y.optibubble"),
+                          "password": ""},
+                    content_type="multipart/form-data")
+    check("restore: encrypted-without-password rejected kindly",
+          r.status_code == 400 and "encrypted" in r.get_json().get("error", ""))
+
+    # desktop camera: synthetic source → gradable frame through the real API
+    from optibubble.sheet_generator import render_pdf_preview as _rpp
+    _syn_png = src_root / "sheet_preview.png"
+    _rpp(src_root / "sheet.pdf", _syn_png, dpi=150)
+    hub.camera_start(0, synthetic=str(_syn_png))
+    import time as _t3; _t3.sleep(0.5)
+    jpg = hub.camera_frame_jpeg()
+    ok_cam = jpg is not None and jpg[:2] == b"\xff\xd8"
+    check("desktop camera: live frame JPEG", ok_cam,
+          f"{len(jpg) if jpg else 0} B")
+    if ok_cam:
+        rc = _c2.post("/api/camera/grade")
+        check("desktop camera: frame graded through the standard pipeline",
+              rc.status_code == 200 and rc.get_json().get("receipt"),
+              str(rc.get_json())[:60])
+    hub.camera_stop()
 
     print()
     bad = [n for n, ok, _ in results if not ok]

@@ -153,6 +153,7 @@ function renderDashboard() {
       <td><div class="trow-actions">
         <button class="btn sm ghost" data-open="${esc(t.test_id)}">${icon("arrow", 12)}Open</button>
         <button class="iconb" title="Edit" data-edit="${esc(t.test_id)}">${icon("pencil", 14)}</button>
+        <button class="iconb" title="Archive (encrypted)" data-arch="${esc(t.test_id)}">${icon("download", 14)}</button>
         <button class="iconb danger" title="Delete" data-del="${esc(t.test_id)}">${icon("trash", 14)}</button>
       </div></td></tr>`).join("") +
     "</tbody></table>" :
@@ -168,6 +169,8 @@ function renderDashboard() {
     b.onclick = () => openEditDialog(b.dataset.edit));
   $("recentTests").querySelectorAll("[data-del]").forEach(b =>
     b.onclick = () => confirmDelete(b.dataset.del));
+  $("recentTests").querySelectorAll("[data-arch]").forEach(b =>
+    b.onclick = () => archiveDialog(b.dataset.arch));
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -179,6 +182,9 @@ function setupReadForm() {
     page_size: S.paper, answer_key: S.key,
     sheet_instructions: $("fInstructions").value,
     write_in_fields: $("fWriteIn").value || "",
+    default_points: parseFloat($("fDefaultPts").value) || 1.0,
+    weights_text: $("fWeights").value || "",
+    partial_multi_credit: parseFloat(S.partial || 0),
     header_font_scale: parseFloat($("fHeaderScale").value) || 1.0,
     logo_position: S.logo || "left",
   };
@@ -213,7 +219,8 @@ function renderKeyGrid() {
 function initSetup() {
   ["fTitle", "fQuestions"].forEach(id => $(id).addEventListener("input", renderKeyGrid));
   const segs = [["fOptions", "opts", 4], ["fDigits", "digits", 7],
-                ["fPaper", "paper", "a4"], ["fLogo", "logo", "left"]];
+                ["fPaper", "paper", "a4"], ["fLogo", "logo", "left"],
+                ["fPartial", "partial", 0]];
   segs.forEach(([id, prop, dflt]) => {
     $(id).querySelectorAll("button").forEach(b => b.onclick = () => {
       $(id).querySelectorAll("button").forEach(x => x.classList.remove("active"));
@@ -375,6 +382,109 @@ function renderKeyCard(st) {
     : `<span class="badge warn">${defined}/${total} defined</span> Grading ` +
       "scores only defined questions until the key is complete.";
 }
+/* ------------------------------------------------- desktop camera */
+let camTimer = null;
+async function initDeskCam() {
+  const refresh = async () => {
+    try {
+      const devs = await api("/api/camera/devices");
+      if (devs.length)
+        $("camSel").innerHTML = devs.map(d =>
+          `<option value="${d.index}">${esc(d.label)}${d.width ? " · " + d.width + "px" : ""}</option>`).join("");
+    } catch {}
+  };
+  $("camRefresh").onclick = refresh;
+  refresh();
+  $("camStart").onclick = async () => {
+    const r = await api("/api/camera/start", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({index: +($("camSel").value || 0)})});
+    if (r.ok) startCamPreview(); else toast(r.message, "err");
+  };
+  $("camStop").onclick = async () => {
+    await api("/api/camera/stop", {method: "POST"});
+    stopCamPreview();
+  };
+  $("camGrade").onclick = async () => {
+    $("camGrade").classList.add("loading");
+    try {
+      const r = await api("/api/camera/grade", {method: "POST"});
+      if (r.receipt) toast("Frame captured — grading", "ok");
+    } catch (e) {
+      toast((e.data && e.data.error && e.data.error.message) || "grading failed", "err");
+    }
+    $("camGrade").classList.remove("loading");
+  };
+}
+function startCamPreview() {
+  $("camStart").style.display = "none"; $("camStop").style.display = "";
+  $("camPreviewWrap").style.display = "";
+  clearInterval(camTimer);
+  camTimer = setInterval(() => {
+    $("camPreview").src = "/api/camera/frame.jpg?t=" + Date.now();
+  }, 250);
+}
+function stopCamPreview() {
+  $("camStart").style.display = ""; $("camStop").style.display = "none";
+  $("camPreviewWrap").style.display = "none";
+  clearInterval(camTimer); camTimer = null;
+}
+
+/* ------------------------------------------------- phone mirror (WebRTC) */
+let mirrorPC = null;
+function initMirror() {
+  $("mirrorBtn").onclick = async () => {
+    if (mirrorPC) { teardownMirror(); return; }
+    await api("/api/mirror/offer", {method: "DELETE"});
+    await api("/api/mirror/answer", {method: "DELETE"});
+    mirrorPC = new RTCPeerConnection();
+    mirrorPC.addTransceiver("video", {direction: "recvonly"});
+    mirrorPC.ontrack = e => {
+      $("mirrorVideo").srcObject = e.streams[0];
+      $("mirrorVideo").style.display = "";
+      $("mirrorHint").textContent = "Live — the phone viewfinder is mirrored here.";
+    };
+    const offer = await mirrorPC.createOffer();
+    await mirrorPC.setLocalDescription(offer);
+    await waitForIce(mirrorPC);
+    await api("/api/mirror/offer", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(mirrorPC.localDescription)});
+    $("mirrorBtn").textContent = "Stop monitoring";
+    $("mirrorHint").textContent = "Waiting for a phone… tap the mirror button in its camera view.";
+    pollForAnswer();
+  };
+}
+async function waitForIce(pc) {
+  if (pc.iceGatheringState === "complete") return;
+  await new Promise(res => {
+    const t = setTimeout(res, 2200);
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+    };
+  });
+}
+async function pollForAnswer() {
+  if (!mirrorPC) return;
+  try {
+    const r = await api("/api/mirror/answer");
+    if (r.payload) {
+      await mirrorPC.setRemoteDescription(r.payload);
+      $("mirrorHint").textContent = "Connected.";
+      return;
+    }
+  } catch {}
+  setTimeout(pollForAnswer, 900);
+}
+function teardownMirror() {
+  if (mirrorPC) try { mirrorPC.close(); } catch {}
+  mirrorPC = null;
+  $("mirrorVideo").style.display = "none"; $("mirrorVideo").srcObject = null;
+  $("mirrorBtn").innerHTML = icon("scan", 13) + "Start monitoring";
+  $("mirrorHint").textContent = "Then on the phone camera view, tap the mirror button.";
+  api("/api/mirror/offer", {method: "DELETE"}).catch(() => {});
+}
+
 function initServe() {
   $("srvBtn").onclick = async () => {
     const st = S.state;
@@ -400,6 +510,7 @@ function initServe() {
     });
   };
   $("ipSel").onchange = () => renderServe();
+  initDeskCam(); initMirror();
   $("keySave").onclick = async () => {
     const txt = $("keyEdit").value;
     const entries = {};
@@ -475,9 +586,10 @@ async function loadReview() {
       <div>
         <b style="color:var(--warn2); font-size:13.5px">${esc(kindLabel(f.kind))}</b>
         <div class="muted" style="font-size:12.5px; margin:3px 0">${esc(f.message)}</div>
-        <div class="ops">${letters.split("").map(L =>
-          `<button data-v="${L}" class="${f.guess === L ? "set" : ""}">${L}</button>`).join("")}
-          <button data-v="" class="${!f.guess ? "set" : ""}" style="min-width:64px">Blank</button>
+        <div class="ops">${flagChoices(f).map(L =>
+          `<button data-v="${L}" class="${f.guess === L ? "set" : ""}"` +
+          `${f.q == null && f.digit != null ? ' style="min-width:30px;padding:7px 0"' : ""}>${L}</button>`).join("")}
+          <button data-v="" class="${!f.guess ? "set" : ""}" style="min-width:56px">Blank</button>
         </div>
       </div>`;
     const cropImg = card.querySelector("img[data-crop]");
@@ -487,23 +599,35 @@ async function loadReview() {
       S.overrides[i] = b.dataset.v || null;
       card.querySelectorAll(".ops button").forEach(x => x.classList.remove("set"));
       b.classList.add("set");
+      // student-ID rows: write the chosen digit straight into the ID field
+      if (isIDFlag(f) && b.dataset.v) {
+        const inp = $("revId");
+        const chars = (inp.value || "").split("");
+        while (chars.length <= f.digit) chars.push("0");
+        chars[f.digit] = b.dataset.v;
+        inp.value = chars.join("");
+      }
     });
     flagsBox.appendChild(card);
   });
   const paintSel = () => box.querySelectorAll(".flagcard").forEach((el, i) =>
     el.style.opacity = i === S.flagIdx ? "1" : ".55");
   paintSel();
+  S.reviewFlags = item.flags;
   box.onkeydown = e => {
     const letters = "ABCDE".slice(0,
       st && st.test ? st.test.options_per_question : 4);
     const cards = box.querySelectorAll(".flagcard");
+    const cur = (S.reviewFlags || [])[S.flagIdx];
+    const idMode = cur && cur.q == null && cur.digit != null;
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       S.flagIdx = (S.flagIdx + (e.key === "ArrowRight" ? 1 : cards.length - 1))
                   % cards.length;
       paintSel(); e.preventDefault();
-    } else if (/^[1-5]$/.test(e.key) && +e.key <= letters.length) {
-      const b = cards[S.flagIdx].querySelector(
-        `.ops button[data-v="${letters[+e.key - 1]}"]`);
+    } else if (idMode ? /^[0-9]$/.test(e.key) :
+               (/^[1-5]$/.test(e.key) && +e.key <= letters.length)) {
+      const v = idMode ? e.key : letters[+e.key - 1];
+      const b = cards[S.flagIdx].querySelector(`.ops button[data-v="${v}"]`);
       if (b) b.click();
     } else if (e.key.toLowerCase() === "b") {
       cards[S.flagIdx].querySelector('.ops button[data-v=""]').click();
@@ -533,11 +657,49 @@ async function loadReview() {
 }
 const kindLabel = k => ({BLANK: "Unanswered", MULTI: "Double mark",
   FAINT: "Faint mark", ID: "Student ID"}[k] || k);
+const isIDFlag = f => f.q == null && f.digit != null;
+const flagChoices = f => isIDFlag(f) ? [..."0123456789"]
+  : "ABCDE".slice(0, (S.state && S.state.test)
+      ? S.state.test.options_per_question : 4).split("");
 
 /* ---------------------------------------------------------------- results */
 async function loadResults() {
   S.rows = await api("/api/results");
   renderResults();
+  renderAnalytics().catch(() => {});
+}
+
+async function renderAnalytics() {
+  const a = await api("/api/analytics").catch(() => null);
+  if (!a) return;
+  const badge = $("kr20Badge"), meta = $("analyticsMeta"), body = $("analyticsBody");
+  if (a.kr20 == null) {
+    badge.className = "badge muted"; badge.textContent = "KR-20 —";
+    meta.textContent = "";
+    body.innerHTML = '<span class="muted">' + esc(a.note ||
+      "needs more sheets") + "</span>";
+    return;
+  }
+  const q = a.kr20 >= 0.8 ? "ok" : a.kr20 >= 0.6 ? "warn" : "err";
+  badge.className = "badge " + q;
+  badge.textContent = "KR-20 " + a.kr20.toFixed(2);
+  meta.textContent = `n=${a.n} · ${a.k} items · mean ${a.mean} · σ ${a.stdev}`;
+  const rows = (a.questions || []).slice().sort((x, y) => y.error_rate - x.error_rate);
+  body.innerHTML = `<div style="display:flex;flex-direction:column;gap:4px">` +
+    rows.slice(0, 8).map(r => {
+      const dq = r.discrimination < 0 ? "err" : r.discrimination < 0.15 ? "warn" : "ok";
+      return `<div style="display:grid;grid-template-columns:44px minmax(0,1fr) 92px 78px;
+        gap:10px;align-items:center;font-size:11.5px">
+        <b>Q${r.q}</b>
+        <div title="error rate ${(r.error_rate*100).toFixed(0)}%">
+          <div class="confbar" style="width:100%"><i style="width:${Math.round(r.error_rate*100)}%"></i></div></div>
+        <span class="badge ${dq}" style="justify-self:start">D ${r.discrimination.toFixed(2)}</span>
+        <span class="muted">${(r.error_rate*100).toFixed(0)}% wrong</span>
+      </div>`;
+    }).join("") + `</div>
+    <div class="hint" style="margin-top:8px">Top items by error rate ·
+      D = discrimination (point-biserial; below 0.15 = weak item, negative =
+      suspects the key). KR-20 ≥ 0.8 is strong.</div>`;
 }
 function renderResults() {
   const q = ($("resFilter").value || "").trim();
@@ -955,7 +1117,7 @@ function init() {
   document.querySelectorAll(".tab").forEach(t => t.onclick = () => goto(t.dataset.page));
   document.querySelectorAll("[data-goto]").forEach(el =>
     el.onclick = () => goto(el.dataset.goto));
-  initSetup(); initServe();
+  initSetup(); initServe(); initRestore();
   $("resFilter").oninput = () => renderResults();
   $("themeBtn").onclick = () => {
     const cur = document.documentElement.dataset.theme || "dark";
@@ -1056,4 +1218,69 @@ function openResultDetail(r) {
       <button class="btn ghost" data-x="close">Close</button>
     </div>`);
   ov.querySelector("[data-x=close]").onclick = e => ov.remove();
+}
+
+
+/* ------------------------------------------------- encrypted archives */
+async function archiveDialog(testId) {
+  const t = (S.tests || []).find(x => x.test_id === testId) || {};
+  const ov = modal(`
+    <h3>${icon("download", 15)} Archive “${esc(t.title || testId)}”</h3>
+    <p class="sub">Packages the whole test — sheet, key, photos, crops and
+       results — into one <b>encrypted</b> <code>.optibubble</code> file
+       (AES-256). Ideal for flash drives and term-end storage.</p>
+    <div class="field"><label>Password (4+ characters)</label>
+      <input type="text" id="archPw" placeholder="archive password"></div>
+    <p class="hint" id="archErr" style="color:var(--err2);display:none"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" data-x="cancel">Cancel</button>
+      <button class="btn" data-x="go">${icon("download", 13)}Download archive</button>
+    </div>`);
+  ov.querySelector("[data-x=cancel]").onclick = () => ov.remove();
+  ov.querySelector("[data-x=go]").onclick = async () => {
+    const pw = $("archPw").value;
+    if (pw.length < 4) {
+      $("archErr").textContent = "Password needs 4+ characters.";
+      $("archErr").style.display = ""; return;
+    }
+    const btn = ov.querySelector("[data-x=go]");
+    btn.classList.add("loading");
+    try {
+      const r = await fetch(`/api/tests/${testId}/archive`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({password: pw})});
+      if (!r.ok) throw await r.json();
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = testId + ".optibubble";
+      a.click(); URL.revokeObjectURL(a.href);
+      ov.remove(); toast("Encrypted archive downloaded", "ok");
+    } catch (e) {
+      $("archErr").textContent = (e && e.error) || "failed";
+      $("archErr").style.display = ""; btn.classList.remove("loading");
+    }
+  };
+}
+
+function initRestore() {
+  const btn = $("restoreBtn");
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+  btn.onclick = () => $("restoreFile").click();
+  $("restoreFile").onchange = async e => {
+    const f = e.target.files[0]; e.target.value = "";
+    if (!f) return;
+    const pw = prompt("Archive password:");
+    if (pw == null) return;
+    const fd = new FormData();
+    fd.append("file", f); fd.append("password", pw);
+    try {
+      const r = await api("/api/archive/restore", {method: "POST", body: fd});
+      toast(`Restored ${r.test_id} (${r.files} files)`, "ok");
+      refresh(true); reloadTests();
+    } catch (err) {
+      toast((err.data && err.data.error) || "restore failed", "err");
+    }
+  };
 }

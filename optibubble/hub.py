@@ -59,6 +59,10 @@ class Hub:
         self._https_days: Optional[int] = None
         self._server_error: str = ""
 
+        from .camera import CameraWorker
+        self.camera = CameraWorker()
+        self._mirror: dict = {"offer": None, "answer": None, "bye": None}
+        self._mirror_lock = threading.Lock()
         self._preview_cache: tuple = ()         # (mtime, bytes)
         self._seen_ids: Dict[str, float] = {}   # student_id → last ts (dedupe hints)
 
@@ -319,15 +323,34 @@ class Hub:
         try:
             app = create_app(self)
             self._flask_app = app
-            self._server = make_server(self.settings.host, self.settings.port, app,
-                                       threaded=True)
+            try:
+                self._server = make_server(self.settings.host,
+                                           self.settings.port, app, threaded=True)
+            except (OSError, SystemExit):
+                # port busy (werkzeug raises SystemExit, not OSError!) →
+                # probe the next few ports and persist what binds
+                bound = None
+                for cand in range(self.settings.port + 1, self.settings.port + 10):
+                    try:
+                        bound = make_server(self.settings.host, cand, app,
+                                            threaded=True)
+                        break
+                    except (OSError, SystemExit):
+                        continue
+                if bound is None:
+                    raise
+                self._server = bound
+                self.log(f"Port {self.settings.port} was busy — using "
+                         f"{cand} (saved)", "warn")
+                self.settings.port = cand
+                self.save_settings()
             self._server_thread = threading.Thread(target=self._server.serve_forever,
                                                    name="optibubble-server", daemon=True)
             self._server_thread.start()
-        except OSError as e:
+        except (OSError, SystemExit) as e:
             self._server = None
-            self._server_error = str(e)
-            self.emit("server_error", error=str(e))
+            self._server_error = (str(e) or "port already in use").splitlines()[-1]
+            self.emit("server_error", error=self._server_error)
             return False
         if self.settings.enable_https:
             self._start_https(app)
@@ -684,6 +707,57 @@ class Hub:
         self.settings.save(settings_path(self.data_dir))
         self.emit("settings_saved")
 
+    # -------------------------------------------------- desktop USB camera
+    def camera_devices(self) -> List[dict]:
+        """Probe the first few video device indices (quick, read-only)."""
+        import cv2 as _cv
+        out = []
+        for idx in range(4):
+            cap = _cv.VideoCapture(idx)
+            ok = cap.isOpened()
+            w = int(cap.get(_cv.CAP_PROP_FRAME_WIDTH)) if ok else 0
+            cap.release()
+            if ok:
+                out.append({"index": idx, "label": f"Camera {idx}",
+                            "width": w})
+        return out
+
+    def camera_start(self, index: int = 0, synthetic: Optional[str] = None
+                     ) -> Tuple[bool, str]:
+        ok, msg = self.camera.start(index, synthetic)
+        if ok:
+            self.log(f"Camera live — {msg} (desktop scanning station)")
+        else:
+            self.log(f"Camera failed: {msg}", "warn")
+        return ok, msg
+
+    def camera_stop(self) -> None:
+        self.camera.stop()
+        self.log("Camera stopped")
+
+    def camera_frame_jpeg(self) -> Optional[bytes]:
+        return self.camera.frame_jpeg()
+
+    # -------------------------------------------------- WebRTC mirror slots
+    def mirror_post(self, slot: str, payload) -> None:
+        with self._mirror_lock:
+            self._mirror[slot] = ({"payload": payload, "ts": time.time()}
+                                  if payload is not None else None)
+
+    def mirror_get(self, slot: str) -> Optional[dict]:
+        with self._mirror_lock:
+            item = self._mirror.get(slot)
+        if not item:
+            return None
+        if time.time() - item["ts"] > 300:      # stale signaling → drop
+            self.mirror_post(slot, None)
+            return None
+        return item
+
     def shutdown(self) -> None:
         self.stop_server()
+        try:
+            self.camera.stop()
+        except Exception:
+            pass
         self._pool.shutdown(wait=False, cancel_futures=True)

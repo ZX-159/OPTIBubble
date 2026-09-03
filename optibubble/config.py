@@ -151,6 +151,14 @@ class TestConfig:
     write_in_fields: str = "Name,Class,Date"       # handwritten fields; the
                                                   # scanner ignores them entirely
 
+    # --- scoring ------------------------------------------------------------
+    default_points: float = 1.0                   # points per question
+    weights: Dict[int, float] = field(default_factory=dict)  # per-question pts
+    partial_multi_credit: float = 0.0             # 0..1 — fraction of the
+                                                  # question's points awarded
+                                                  # automatically when a double
+                                                  # mark still contains the key
+
     # ------------------------------------------------------------------
     def validate(self) -> List[str]:
         errs: List[str] = []
@@ -173,6 +181,11 @@ class TestConfig:
             self.logo_position = "left"
         self.sheet_instructions = (self.sheet_instructions or "").strip()[:240]
         self.write_in_fields = self.parse_write_in_fields_text(self.write_in_fields)
+        self.default_points = float(min(max(self.default_points or 1.0, 0.1), 100.0))
+        self.partial_multi_credit = float(min(
+            max(self.partial_multi_credit or 0.0, 0.0), 1.0))
+        self.weights = {int(q): max(0.0, float(v))
+                        for q, v in (self.weights or {}).items()}
         bad = {q: a for q, a in self.answer_key.items()
                if a not in LETTERS[: self.options_per_question]}
         if bad:
@@ -181,6 +194,27 @@ class TestConfig:
         return errs
 
     WRITE_IN_MAX = 6
+
+    @staticmethod
+    def parse_weights_text(text: str) -> Dict[int, float]:
+        """Parse “5:2, 9-12:3, 15:2.5” into {q: points}."""
+        import re as _re
+        out: Dict[int, float] = {}
+        for tok in (text or "").replace(";", ",").split(","):
+            tok = tok.strip().rstrip(".")
+            if not tok:
+                continue
+            m = _re.fullmatch(r"(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*:\s*([0-9]*\.?[0-9]+)", tok)
+            if not m:
+                raise ValueError(f"Bad points entry “{tok}” — use e.g. 5:2 or 9-12:3")
+            a = int(m.group(1)); b = int(m.group(2) or a)
+            pts = float(m.group(3))
+            for q in range(min(a, b), max(a, b) + 1):
+                out[q] = pts
+        return out
+
+    def weight_for(self, qn: int) -> float:
+        return float(self.weights.get(qn, self.default_points))
 
     def parse_write_in_fields_text(self, text: str) -> str:
         """Normalise a comma/space separated label list → canonical CSV string."""
@@ -251,10 +285,13 @@ class TestConfig:
         for k in ("title", "subject", "num_questions", "options_per_question",
                   "student_id_digits", "page_size", "test_id", "session_token",
                   "created_at", "sheet_instructions", "logo_position",
-                  "write_in_fields"):
+                  "write_in_fields", "default_points", "partial_multi_credit"):
             if k in d:
                 setattr(t, k, d[k])
         t.header_font_scale = float(d.get("header_font_scale", 1.0) or 1.0)
+        t.default_points = float(d.get("default_points", 1.0) or 1.0)
+        t.partial_multi_credit = float(d.get("partial_multi_credit", 0.0) or 0.0)
+        t.weights = {int(q): float(v) for q, v in (d.get("weights") or {}).items()}
         t.answer_key = {int(q): a for q, a in (d.get("answer_key") or {}).items()}
         return t
 

@@ -68,8 +68,9 @@ class GradeResult:
     student_id: str = ""
     answers: Dict[int, Optional[str]] = field(default_factory=dict)
     correct: Dict[int, bool] = field(default_factory=dict)
-    score: int = 0
-    max_score: int = 0
+    score: float = 0
+    max_score: float = 0
+    partials: List[int] = field(default_factory=list)
     confidence: float = 1.0
     flags: List[Flag] = field(default_factory=list)
     status: str = "auto"                     # auto | review
@@ -431,11 +432,12 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
 
     # questions without a key entry are excluded from scoring — the key can
     # still be defined or completed after the sheets were printed
-    n_keyed = sum(1 for qn in range(1, lay.num_questions + 1)
-                  if qn in test.answer_key)
+    keyed = [qn for qn in range(1, lay.num_questions + 1)
+             if qn in test.answer_key]
+    n_keyed = len(keyed)
     result = GradeResult(sheet_id=uuid.uuid4().hex[:12],
                          ts=time.strftime("%Y-%m-%d %H:%M:%S"),
-                         max_score=n_keyed)
+                         max_score=float(sum(test.weight_for(qn) for qn in keyed)))
     crops_dir = session_dir / "review" / "crops" / result.sheet_id
 
     # ---------------- student ID -------------------------------------------
@@ -464,6 +466,7 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
 
     # ---------------- questions --------------------------------------------
     confs: List[float] = []
+    partials: List[int] = []
     answers: Dict[int, Optional[str]] = {}
     correct: Dict[int, bool] = {}
 
@@ -487,12 +490,24 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
                 if cov < 0.12:
                     status = "faint"
 
+        # double-mark that still contains the key + partial credit policy →
+        # award the fraction automatically instead of flagging
+        if (status == "multi" and test.partial_multi_credit > 0
+                and test.answer_key.get(qn) in
+                [LETTERS[i] for i, d in enumerate(dens) if d >= s.t_fill]):
+            result.score += round(test.weight_for(qn) * test.partial_multi_credit, 3)
+            partials.append(qn)
+            confs.append(max(conf, 0.5))
+            answers[qn] = None
+            correct[qn] = False
+            continue
+
         confs.append(conf)
         letter = LETTERS[marked] if (marked is not None and status != "multi") else None
         answers[qn] = letter
         correct[qn] = bool(letter and test.answer_key.get(qn) == letter)
         if letter and correct[qn]:
-            result.score += 1
+            result.score += test.weight_for(qn)
 
         if status == "ok":
             continue
@@ -511,6 +526,7 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
 
     result.answers = answers
     result.correct = correct
+    result.partials = partials
     result.confidence = float(np.mean(confs)) if confs else 1.0
     result.status = "review" if result.flags else "auto"
     result.duration_ms = int((time.perf_counter() - t0) * 1000)
