@@ -90,8 +90,7 @@ jobs:
       - name: Freeze the Python engine (single self-contained binary)
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller optibubble.spec --distpath src-tauri/engine \
-            --workpath build-engine --noconfirm
+          pyinstaller optibubble.spec --distpath src-tauri/engine --workpath build-engine --noconfirm
 
       - name: cargo check (src-tauri)
         run: cargo check --manifest-path src-tauri/Cargo.toml
@@ -158,8 +157,7 @@ jobs:
       - name: Freeze the Python engine (single self-contained binary)
         run: |
           pip install -r requirements.txt pyinstaller
-          pyinstaller optibubble.spec --distpath src-tauri/engine \
-            --workpath build-engine --noconfirm
+          pyinstaller optibubble.spec --distpath src-tauri/engine --workpath build-engine --noconfirm
 
       - name: Build bundles & attach to the draft release
         uses: tauri-apps/tauri-action@v0
@@ -167,10 +165,12 @@ jobs:
           projectPath: .
           tagName: v__VERSION__
           releaseName: "OPTIBubble v__VERSION__"
-          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Each installer is fully self-contained (Python engine frozen with PyInstaller) — end users need nothing installed. Verify downloads against the SHA256SUMS file described in the README."
+          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Each installer is fully self-contained (Python engine frozen into a single binary). Unpack and run the installer for your OS."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ----------------------------------------------------- release: Flatpak ---
   flatpak:
@@ -185,7 +185,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Flatpak
-        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@main
+        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v7
         with:
           bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
           manifest-path: packaging/flatpak/com.optibubble.app.yml
@@ -197,3 +197,5 @@ jobs:
         with:
           draft: true
           files: OPTIBubble_*_x86_64.flatpak
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
