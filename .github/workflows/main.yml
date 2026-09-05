@@ -185,7 +185,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Flatpak
-        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v7
+        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@main
         with:
           bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
           manifest-path: packaging/flatpak/com.optibubble.app.yml
