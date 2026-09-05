@@ -1,7 +1,29 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { AlertTriangle, Camera, Check, Image as ImageIcon, User, Zap } from "lucide-react";
+import { AnimatePresence, useReducedMotion, motion } from "motion/react";
+import { AlertTriangle, Camera, CameraOff, Check, Flashlight,
+         Image as ImageIcon, Moon, RefreshCw, Sun, SwitchCamera, User } from "lucide-react";
 import { EdgeOverlay } from "../lib/edge";
+
+/* Map a getUserMedia error to a clear, actionable message.  Keeps the camera
+   failure states distinct so the user knows whether to grant permission, close
+   another app, or use the photo fallback. */
+function camError(err) {
+  const n = err?.name || "";
+  if (n === "NotAllowedError" || n === "PermissionDeniedError" || n === "SecurityError")
+    return { code: "CAM_DENIED",
+             msg: "Camera permission was blocked",
+             hint: "Allow camera access in your browser settings, or upload a photo instead." };
+  if (n === "NotFoundError" || n === "OverconstrainedError" || n === "DevicesNotFoundError")
+    return { code: "CAM_NONE",
+             msg: "No camera was found",
+             hint: "Check the camera works in another app, or upload a photo instead." };
+  if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError")
+    return { code: "CAM_BUSY",
+             msg: "The camera is busy",
+             hint: "Close other apps using the camera, then press Try again." };
+  return { code: "CAM_ERROR", msg: "Could not start the camera",
+           hint: "Try again, or upload a photo instead." };
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g,
@@ -12,6 +34,17 @@ const esc = (s) => String(s).replace(/[&<>"']/g,
    quick check + upload + result, plus mirror-to-desktop over WebRTC. */
 export default function Scanner() {
   const token = window.location.pathname.split("/").pop();
+  const reduced = useReducedMotion();
+  const [night, setNight] = useState(() => {
+    const saved = localStorage.getItem("ob_theme");
+    if (saved) return saved === "ink";
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  });
+  useEffect(() => {
+    document.documentElement.className = night ? "theme-ink" : "theme-day";
+    localStorage.setItem("ob_theme", night ? "ink" : "day");
+    return () => { document.documentElement.className = "theme-day"; };
+  }, [night]);
   const [cfg, setCfg] = useState({ title: "", sub: "", quality: 0.92, width: 2048 });
   const [view, setView] = useState("intro"); // intro|camera|confirm|upload|result
   const [info, setInfo] = useState(null);
@@ -23,6 +56,11 @@ export default function Scanner() {
   const [hint, setHint] = useState(null);
   const [qual, setQual] = useState(null);
   const [count, setCount] = useState(+(localStorage.getItem("ob_" + token) || 0));
+  const [progress, setProgress] = useState(0);
+  const [facing, setFacing] = useState("environment");   // environment|user
+  const [torch, setTorch] = useState(false);
+  const [camErr, setCamErr] = useState(null);            // {code,msg,hint}
+  const [streamId, setStreamId] = useState(0);           // bump to re-attach stream
   const videoRef = useRef(null), canvasRef = useRef(null), streamRef = useRef(null);
   const edgeRef = useRef(null), pcRef = useRef(null), flashRef = useRef(null);
   const mirrorTimerRef = useRef(null);
@@ -49,16 +87,32 @@ export default function Scanner() {
       "image/jpeg", cfg.quality);
   };
 
-  const startCamera = async () => {
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (edgeRef.current) { try { edgeRef.current.stop?.(); } catch {} edgeRef.current = null; }
+    setTorch(false);
+  };
+
+  // (Re)acquire the camera for a given facingMode.  On a clean error it records
+  // a distinct, actionable CAM_* state instead of silently falling back, so the
+  // user is told exactly what to fix.
+  const startCamera = async (facingMode = facing) => {
+    setCamErr(null);
+    if (streamRef.current) stopStream();       // switch camera / retry
     try {
-      const s = window.__OB_TEST_CAM__            // test hook (synthetic stream)
+      const s = window.__OB_TEST_CAM__         // test hook (synthetic stream)
         ? window.__OB_TEST_CAM__
         : await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" },
+            video: { facingMode: { ideal: facingMode },
                      width: { ideal: cfg.width } }, audio: false });
       streamRef.current = s;
-      setView("camera");                     // mounts <video>, effect attaches
+      setFacing(facingMode);
+      setStreamId((i) => i + 1);               // re-runs the attach effect
+      setView("camera");                       // mounts <video>, effect attaches
       setTimeout(() => {
+        if (!streamRef.current) return;        // switched again meanwhile
         edgeRef.current = new EdgeOverlay(videoRef.current, canvasRef.current, {
           onAlign: (m, t) => setAlign({ m, t }),
           onQuality: setQual,
@@ -71,12 +125,34 @@ export default function Scanner() {
         edgeRef.current.autoCapWanted =
           () => localStorage.getItem("ob_autocap") === "1";
         edgeRef.current.start();
-        window.__edge = edgeRef.current;      // debug/test handle
+        window.__edge = edgeRef.current;       // debug/test handle
       }, 400);
-    } catch {
-      $("fileInput").removeAttribute("capture");
-      $("fileInput").click();
+    } catch (err) {
+      setCamErr(camError(err));
     }
+  };
+
+  const switchCam = async () => {
+    const next = facing === "environment" ? "user" : "environment";
+    setView("camera");
+    await startCamera(next);
+  };
+
+  // Real camera torch (LED) where the browser exposes it — the way to actually
+  // light the paper so both the snap and the mirrored stream read well.  Where
+  // the camera has no torch, tell the user instead of pretending (a CSS overlay
+  // wouldn't reach the camera sensor we're streaming).
+  const toggleTorch = async () => {
+    const track = streamRef.current?.getVideoTracks()[0];
+    const caps = track?.getCapabilities?.();
+    if (track && caps && caps.torch) {
+      try {
+        await track.applyConstraints({ advanced: [{ torch: !torch }] });
+        setTorch(!torch);
+        return;
+      } catch {}
+    }
+    setHint("Torch isn't available on this camera — switch on your phone's flashlight");
   };
 
   const quickCheck = (b) => new Promise((done) => {
@@ -138,7 +214,7 @@ export default function Scanner() {
       if ((v && v.videoWidth > 0) || ++tries > 50) clearInterval(iv);
     }, 100);
     return () => clearInterval(iv);
-  }, [view]);
+  }, [view, streamId]);
 
   const send = () => {
     setView("upload");
@@ -159,7 +235,6 @@ export default function Scanner() {
       "Make sure both devices are on the same Wi-Fi.");
     x.send(fd);
   };
-  const [progress, setProgress] = useState(0);
   const poll = (rid) => {
     setProgress(95);
     const t0 = Date.now();
@@ -284,109 +359,161 @@ export default function Scanner() {
     if (pcRef.current) { try { pcRef.current.close(); } catch {} pcRef.current = null; }
   }, []);
 
-  const btn = "inline-flex items-center justify-center gap-2 rounded px-5 py-3 " +
-    "text-[13.5px] font-extrabold";
+  const btn = "inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 " +
+    "text-[14px] font-extrabold";
+  const secBtn = `${btn} border border-hair2 bg-fill text-ink2`;
   return (
-    <div className="mx-auto flex min-h-full max-w-[560px] flex-col px-3.5 pb-3">
-      <header className="glass flex items-center gap-3 border-b border-hair px-4 py-3">
-        <img src="/assets/logo-wordmark-white.png" alt="OPTIBubble" className="h-[21px]"/>
-        <span className={`ml-auto rounded-full px-2.5 py-1 text-[9.5px] font-extrabold
-          uppercase tracking-[.1em] ${window.isSecureContext
-            ? "bg-okdim text-ok" : "bg-fill text-ink3"}`}>
-          {window.isSecureContext ? "secure camera" : "connected"}</span>
+    <div className="mx-auto flex min-h-dvh max-w-[560px] flex-col">
+      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b
+        border-hair bg-[color-mix(in_srgb,var(--bg1)_88%,transparent)] px-4 py-3
+        backdrop-blur">
+        <span className="regmark regmark-iris shrink-0" aria-hidden="true" />
+        <span className="fbrand shrink-0 text-[19px] leading-none" style={{ color: "var(--tx)" }}>
+          OPTIBubble</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className={`rounded-full px-2.5 py-1 text-[9.5px] font-extrabold
+            uppercase tracking-[.1em] ${window.isSecureContext
+              ? "bg-okdim text-ok" : "bg-fill text-ink3"}`}>
+            {window.isSecureContext ? "secure camera" : "connected"}</span>
+          <button onClick={() => setNight((n) => !n)} aria-label="Toggle theme"
+            className="focusable hov flex h-8 w-8 shrink-0 items-center justify-center
+              rounded text-ink2">{night ? <Sun size={15} /> : <Moon size={15} />}</button>
+        </div>
       </header>
 
-      <main className="flex flex-1 flex-col items-center py-3">
+      <main className="flex flex-1 flex-col items-center px-4 py-4">
         <AnimatePresence mode="wait">
           {view === "intro" && (
-            <motion.section key="intro" initial={{ opacity: 0, scale: 0.97 }}
+            <motion.section key="intro" initial={reduced ? false : { opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-              className="w-full rounded-card border border-hair bg-surface p-5 text-center">
+              transition={reduced ? { duration: 0.1 } : { type: "spring", stiffness: 380, damping: 30 }}
+              className="my-auto w-full rounded-card border border-hair bg-surface p-5
+                text-center shadow-card">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-branddim
-                px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[.1em] text-brandhi">
-                <Camera size={12}/> Scan with your phone</span>
-              <h1 className="mt-2.5 text-[16px] font-extrabold">
+                px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[.1em]
+                text-brandhi"><Camera size={12}/> Scan with your phone</span>
+              <h1 className="mt-3 text-[18px] font-extrabold leading-snug text-ink">
                 {cfg.title || "Loading test…"}</h1>
-              <p className="mb-3.5 text-[12px] text-ink3">{cfg.sub || "—"}</p>
-              <ol className="mb-4 ml-4 list-disc space-y-1 text-left text-[12.5px]
-                leading-relaxed text-ink2">
-                <li>Hold the sheet <b className="text-ink">flat</b> on a well-lit table</li>
-                <li>Fit all <b className="text-ink">4 corner squares</b> inside the frame</li>
-                <li>Snap — grading happens on this computer in milliseconds</li>
+              <p className="mt-1 mb-4 text-[12.5px] text-ink3">{cfg.sub || "—"}</p>
+              <ol className="mx-auto mb-5 max-w-[300px] list-disc space-y-2.5 pl-5
+                text-left text-[13px] leading-relaxed text-ink2">
+                <li>Hold the sheet <b className="text-ink">flat</b> and well-lit</li>
+                <li>Fit all <b className="text-ink">4 corner squares</b> in frame</li>
+                <li>Snap — it grades in milliseconds</li>
               </ol>
-              <div className="flex gap-2.5">
+              <div className="flex flex-col gap-2.5">
                 <button onClick={startCamera}
-                  className={`${btn} flex-1 bg-brand text-brandink shadow-brand`}>
+                  className={`${btn} w-full bg-brand text-brandink shadow-brand`}>
                   <Camera size={16}/> Start camera</button>
                 <button onClick={() => $("fileInput").click()}
-                  className={`${btn} flex-1 border border-hair2 bg-fill`}>
-                  <ImageIcon size={16}/> Upload photo</button>
+                  className={`${secBtn} w-full`}>
+                  <ImageIcon size={15}/> Upload a photo instead</button>
               </div>
               <label className="mt-3.5 flex cursor-pointer items-center justify-center
-                gap-2 text-[12.5px] text-ink2">
+                gap-2 py-1 text-[12.5px] text-ink2">
                 <input type="checkbox" defaultChecked={
                   localStorage.getItem("ob_autocap") === "1"}
                   onChange={(e) => localStorage.setItem("ob_autocap",
                     e.target.checked ? "1" : "0")}
-                  className="h-3.5 w-3.5 accent-[#FF5A2D]"/>
-                Auto-capture when the sheet is aligned</label>
+                  className="h-3.5 w-3.5 accent-[var(--brand)]"/>
+                Auto-capture when aligned</label>
             </motion.section>
           )}
 
           {view === "camera" && (
             <motion.section key="cam" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
               className="w-full">
-              <div className="reticle relative aspect-[3/4] max-h-[62vh] w-full
-                overflow-hidden rounded-card border border-hair bg-surface">
-                <video ref={videoRef} autoPlay playsInline muted
-                  className="h-full w-full object-cover"/>
-                <canvas ref={canvasRef}
-                  className="pointer-events-none absolute inset-0 h-full w-full"/>
-                <div ref={flashRef}
-                  className="pointer-events-none absolute inset-0 bg-white opacity-0"/>
-                <div className="pointer-events-none absolute inset-x-0 bottom-0
-                  bg-gradient-to-t from-black/85 to-transparent px-3.5 pb-3 pt-8
-                  text-center text-[11.5px] text-white">
-                  {hint || (align
-                    ? (align.m === "ok"
-                      ? <b className="text-[var(--brand)]">{align.t}</b>
-                      : align.t)
-                    : "Fill the frame — all 4 black corner squares must be visible")}
+              {camErr ? (
+                <div className="aspect-[3/4] max-h-[62vh] w-full overflow-hidden
+                  rounded-card border border-hair bg-surface p-6 text-center
+                  flex flex-col items-center justify-center">
+                  <span className="inline-flex items-center gap-1.5 rounded-full
+                    bg-errdim px-2.5 py-1 text-[10px] font-extrabold uppercase
+                    tracking-[.1em] text-err"><CameraOff size={12}/>{camErr.code}</span>
+                  <h1 className="mt-3 text-[15px] font-extrabold text-ink">{camErr.msg}</h1>
+                  <p className="mt-1 max-w-[280px] text-[12px] leading-relaxed text-ink3">
+                    {camErr.hint}</p>
+                  <div className="mt-4 flex flex-col gap-2">
+                    <button onClick={() => startCamera()}
+                      className={`${btn} w-full bg-brand text-brandink shadow-brand`}>
+                      <RefreshCw size={15}/> Try again</button>
+                    <button onClick={() => $("fileInput").click()}
+                      className={`${secBtn} w-full`}>
+                      <ImageIcon size={15}/> Take a photo instead</button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-2 pt-3">
-                {[
-                  [`${qual?.anchors ?? "–"}/4 anchors`,
-                   (qual?.anchors ?? 0) === 4 ? "ok" : "warn"],
-                  [qual?.exposure === "dark" ? "too dark"
-                   : qual?.exposure === "glare" ? "glare" : "exposure ok",
-                   qual?.exposure === "ok" || !qual ? "mute" : "warn"],
-                  [qual?.focus === "soft" ? "hold steady"
-                   : qual?.focus === "noisy" ? "noisy" : "focus ok",
-                   qual?.focus === "ok" || !qual ? "mute" : "warn"],
-                  ...(qual?.coverage ? [`${qual.coverage}% frame`] : []),
-                ].map(([label, tone]) => (
-                  <span key={label} className={`rounded-full px-2.5 py-0.5
-                    font-mono text-[9.5px] font-medium uppercase tracking-[.14em]
-                    ${tone === "ok" ? "bg-okdim text-ok"
-                      : tone === "warn" ? "bg-warndim text-warn"
-                      : "bg-fill text-ink3"}`}>{label}</span>
-                ))}
-              </div>
-              <div className="flex items-center justify-center gap-6 py-3">
-                <button onClick={mirror} aria-label="Mirror to desktop"
-                  className={`focusable h-11 w-11 rounded text-[18px]
-                    ${mirrorOn ? "bg-brand text-brandink" : "bg-fill text-ink2"}`}>⌁</button>
-                <button onClick={snap} aria-label="Capture"
-                  className="focusable relative h-[68px] w-[68px] rounded-md bg-brand
-                    text-brandink active:scale-95">
-                  <span className="absolute inset-[7px] rounded-[4px] border-2
-                    border-brandink/80"/>
-                </button>
-                <button onClick={() => $("fileInput").click()} aria-label="Gallery"
-                  className="focusable flex h-11 w-11 items-center justify-center
-                    rounded bg-fill text-ink2"><ImageIcon size={18}/></button>
-              </div>
+              ) : (
+                <>
+                  <div className="reticle relative aspect-[3/4] max-h-[62vh] w-full
+                    overflow-hidden rounded-card border border-hair bg-surface">
+                    <video ref={videoRef} autoPlay playsInline muted
+                      className="h-full w-full object-cover"/>
+                    <canvas ref={canvasRef}
+                      className="pointer-events-none absolute inset-0 h-full w-full"/>
+                    <div ref={flashRef}
+                      className="pointer-events-none absolute inset-0 bg-white opacity-0"/>
+                    <div className="pointer-events-none absolute inset-x-0 top-0 flex
+                      justify-center pt-2.5">
+                      <span className={`rounded-full px-2.5 py-1 text-[9.5px]
+                        font-extrabold uppercase tracking-[.14em] ${facing === "user"
+                          ? "bg-fill text-ink3" : "bg-okdim text-ok"}`
+                      }>rear</span>
+                    </div>
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0
+                      bg-gradient-to-t from-black/85 to-transparent px-3.5 pb-3 pt-8
+                      text-center text-[11.5px] text-white">
+                      {hint || (align
+                        ? (align.m === "ok"
+                          ? <b className="text-[var(--brand)]">{align.t}</b>
+                          : align.t)
+                        : "Fill the frame — all 4 black corner squares must be visible")}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-3">
+                    {[
+                      [`${qual?.anchors ?? "–"}/4 anchors`,
+                       (qual?.anchors ?? 0) === 4 ? "ok" : "warn"],
+                      [qual?.exposure === "dark" ? "too dark"
+                       : qual?.exposure === "glare" ? "glare" : "exposure ok",
+                       qual?.exposure === "ok" || !qual ? "mute" : "warn"],
+                      [qual?.focus === "soft" ? "hold steady"
+                       : qual?.focus === "noisy" ? "noisy" : "focus ok",
+                       qual?.focus === "ok" || !qual ? "mute" : "warn"],
+                      ...(qual?.coverage ? [`${qual.coverage}% frame`] : []),
+                    ].map(([label, tone]) => (
+                      <span key={label} className={`rounded-full px-2.5 py-0.5
+                        font-mono text-[9.5px] font-medium uppercase tracking-[.14em]
+                        ${tone === "ok" ? "bg-okdim text-ok"
+                          : tone === "warn" ? "bg-warndim text-warn"
+                          : "bg-fill text-ink3"}`}>{label}</span>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-center gap-2.5 py-3">
+                    <button onClick={switchCam} aria-label="Switch camera"
+                      className={`focusable flex h-11 w-11 items-center justify-center
+                        rounded ${facing === "user" ? "bg-brand text-brandink"
+                          : "bg-fill text-ink2"}`}>
+                      <SwitchCamera size={18}/></button>
+                    <button onClick={toggleTorch} aria-label="Flash"
+                      className={`focusable flex h-11 w-11 items-center justify-center
+                        rounded ${torch ? "bg-brand text-brandink" : "bg-fill text-ink2"}`}>
+                      <Flashlight size={18}/></button>
+                    <button onClick={snap} aria-label="Capture"
+                      className="focusable relative h-[68px] w-[68px] rounded-md bg-brand
+                        text-brandink active:scale-95">
+                      <span className="absolute inset-[7px] rounded-[4px] border-2
+                        border-brandink/80"/>
+                    </button>
+                    <button onClick={() => $("fileInput").click()} aria-label="Gallery"
+                      className="focusable flex h-11 w-11 items-center justify-center
+                        rounded bg-fill text-ink2"><ImageIcon size={18}/></button>
+                    <button onClick={mirror} aria-label="Mirror to desktop"
+                      className={`focusable flex h-11 w-11 items-center justify-center
+                        rounded text-[18px] ${mirrorOn ? "bg-brand text-brandink"
+                          : "bg-fill text-ink2"}`}>⌁</button>
+                  </div>
+                </>
+              )}
             </motion.section>
           )}
 
@@ -428,7 +555,7 @@ export default function Scanner() {
           )}
 
           {view === "result" && res && (
-            <motion.section key="res" initial={{ opacity: 0, scale: 0.94 }}
+            <motion.section key="res" initial={reduced ? false : { opacity: 0, scale: 0.94 }}
               animate={{ opacity: 1, scale: 1 }}
               className="w-full rounded-card border border-hair bg-surface p-5 text-center">
               {res.failed ? (
@@ -498,9 +625,13 @@ export default function Scanner() {
             img.src = URL.createObjectURL(f);
           }}/>
       </main>
-      <footer className="py-2.5 text-center text-[10.5px] text-ink3">
-        <b className="text-ink2">{count}</b> sheets submitted this session · local
-        network only — your data never leaves the room</footer>
+      <footer className="sticky bottom-0 z-20 border-t border-hair bg-[var(--bg1)]
+        px-4 py-2.5">
+        <p className="flex items-center justify-center gap-1.5 text-center text-[11px]
+          text-ink3">
+          <b className="tnum text-ink2">{count}</b> submitted · local network only —
+          data never leaves the room</p>
+      </footer>
     </div>
   );
 }

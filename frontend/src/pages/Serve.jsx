@@ -1,13 +1,39 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Camera, Check, Copy, Eye, KeyRound, MonitorUp, Play, Printer, RefreshCw,
-  Square, Upload,
+  Camera, Check, Copy, KeyRound, MonitorUp, Play, Printer, RefreshCw,
+  Square, ChevronDown, Activity, Cable, ArrowRight, Plus, ListChecks, Radio,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../App";
-import { Badge, Button, Card, Field, Input, LiveBadge, Select, useToast,
-         spring } from "../components/ui";
+import { useFetch } from "../lib/hooks";
+import { AnimatedNum, Badge, Button, Card, Field, Input, LiveBadge, Select,
+         useToast, spring } from "../components/ui";
+
+/* Collapsible section so secondary tools never compete with the scan link */
+function Accordion({ title, icon: Icon, children, defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="panel grain overflow-hidden">
+      <button onClick={() => setOpen((o) => !o)}
+        className="focusable flex w-full items-center gap-2.5 px-5 py-4 text-left">
+        <Icon size={17} className="shrink-0 text-ink3" />
+        <span className="text-[13.5px] font-extrabold text-ink">{title}</span>
+        <ChevronDown size={16}
+          className={`ml-auto text-ink3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} transition={spring}
+            className="overflow-hidden px-5 pb-5">
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 /* ================= QR + server control ================= */
 function QrPanel() {
@@ -20,10 +46,13 @@ function QrPanel() {
   useEffect(() => { if (!ip && ips.length) setIp(ips[0]); }, [ips, ip]);
   const trusted = !!(s.https_domain && s.https_running);
   const test = state?.test;
-  const scanUrl = !test ? "" : s.https_running
+  // If no non-loopback LAN address could be detected, the QR/link would be
+  // malformed (`http://:5000/…`); guard it instead of emitting a broken URL.
+  const noLanIp = !ip;
+  const scanUrl = !test || noLanIp ? "" : s.https_running
     ? `https://${trusted ? s.https_domain : ip}:${s.https_port}/scan/${test.session_token}`
     : `http://${ip}:${s.port}/scan/${test.session_token}`;
-  const certUrl = `http://${ip}:${s.port}/cert`;
+  const certUrl = noLanIp ? "" : `http://${ip}:${s.port}/cert`;
 
   const toggle = async () => {
     setBusy(true);
@@ -38,8 +67,18 @@ function QrPanel() {
   };
 
   return (
-    <Card title="User scan">
-      {!test ? <p className="text-[12.5px] text-ink3">Create a test first.</p> : !s.running ? (
+    <div className="panel sheet overflow-hidden">
+      <div className="border-b border-[var(--paper-deep)] px-5 py-3.5">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-branddim px-3 py-1 text-[10.5px]
+            font-extrabold uppercase tracking-[.1em] text-brand">Scan link</span>
+          {s.running
+            ? <Badge tone="ok">live</Badge>
+            : <Badge tone="mute">offline</Badge>}
+        </div>
+      </div>
+      <div className="p-5">
+      {!test ? <p className="text-[13px] text-ink3">Create a test first.</p> : !s.running ? (
         <div className="space-y-3">
           <p className="text-[12.5px] leading-relaxed text-ink2">
             The server is <b>offline</b> — start it to show the scan QR code.</p>
@@ -57,6 +96,14 @@ function QrPanel() {
               : <>Users scan and use the upload button (native camera). The live
                  viewfinder needs the HTTPS setup in Settings.</>}
           </p>
+          {noLanIp && (
+            <div className="mb-3 rounded border border-err/40 bg-errdim px-3 py-2
+              text-[11.5px] leading-relaxed text-err">
+              Couldn't detect this computer's <b>LAN address</b>, so the scan link
+              can't be built. Connect to Wi-Fi (or a hotspot), disable AP isolation,
+              then reopen this page and start the server again.
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             {s.https_running && !trusted && (
               <div className="flex flex-col items-center gap-1.5 text-center">
@@ -111,7 +158,8 @@ function QrPanel() {
             <KeyRound size={13}/> Answer key</a>
         </div>
       </div>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -129,6 +177,12 @@ function KeyCard() {
   }, [t?.test_id]);
   if (!t) return null;
   const defined = Object.keys(t.answer_key || {}).length;
+  // Allowed letters depend on the test's option count (A–B … A–E); a fixed
+  // [A-E] would silently drop letters for 4-option tests (e.g. "1:A 2:F 3:C"
+  // → only Q1 & Q3 set), giving a partial key with no warning.
+  const letters = "ABCDEFGHIJ".slice(0, t.options_per_question || 4);
+  const scanRe = new RegExp(`(\\d{1,3})\\s*[:.\\-]\\s*([${letters}])`, "g");
+  const compactRe = new RegExp(`[^${letters}]`, "g");
   return (
     <Card title="Answer key" right={
       defined >= t.num_questions ? <Badge tone="ok">complete</Badge>
@@ -144,12 +198,13 @@ function KeyCard() {
           setBusy(true);
           try {
             const entries = {};
-            (txt.toUpperCase().match(/(\d{1,3})\s*[:.\-]\s*([A-E])/g) || [])
-              .forEach((m) => { const g = m.match(/(\d{1,3})\s*[:.\-]\s*([A-E])/);
-                                entries[+g[1]] = g[2]; });
+            (txt.toUpperCase().match(scanRe) || [])
+              .forEach((m) => { const g = m.match(scanRe);
+                                const q = +g[1];
+                                if (q >= 1 && q <= t.num_questions) entries[q] = g[2]; });
             if (!Object.keys(entries).length)
-              [...txt.toUpperCase().replace(/[^A-E]/g, "")].forEach(
-                (a, i) => { entries[i + 1] = a; });
+              [...txt.toUpperCase().replace(compactRe, "")].forEach(
+                (a, i) => { if (i + 1 <= t.num_questions) entries[i + 1] = a; });
             const r = await api("/api/key", { method: "POST",
               body: JSON.stringify({ entries, replace: true })});
             toast(`Key updated — ${r.defined}/${r.total} defined`, "ok");
@@ -233,6 +288,7 @@ function MirrorPanel() {
   const pcRef = useRef(null);
   const pollRef = useRef(null);
   const liveTimerRef = useRef(null);
+  const iceGraceRef = useRef(null);   // transient `disconnected` grace timer
 
   const detachVideo = () => {
     if (videoRef.current) {
@@ -242,6 +298,7 @@ function MirrorPanel() {
   const stopAll = useCallback(() => {
     clearInterval(pollRef.current);
     clearTimeout(liveTimerRef.current);
+    clearTimeout(iceGraceRef.current);
     if (pcRef.current) try { pcRef.current.close(); } catch {}
     pcRef.current = null;
     detachVideo();
@@ -284,10 +341,29 @@ function MirrorPanel() {
       const onIceState = () => {
         const cs = pc.connectionState, is = pc.iceConnectionState;
         if (cs === "connected" || cs === "completed" ||
-            is === "connected" || is === "completed") markLive();
-        if (cs === "failed" || is === "failed" || cs === "disconnected") {
+            is === "connected" || is === "completed") {
+          markLive();
+          clearTimeout(iceGraceRef.current);       // recovered from a blip
+          return;
+        }
+        if (cs === "failed" || is === "failed") {
+          clearTimeout(iceGraceRef.current);
           setErr("Connection lost — the phone left or the network changed.");
           setPhase("error");
+          return;
+        }
+        // ICE `disconnected` is often transient (phone screen off for a beat).
+        // Give it a few seconds to come back before declaring an error.
+        if (cs === "disconnected" || is === "disconnected") {
+          if (iceGraceRef.current) return;
+          iceGraceRef.current = setTimeout(() => {
+            // still gone after the grace window → treat as a real drop
+            if (((pc.connectionState === "disconnected") ||
+                 (pc.iceConnectionState === "disconnected"))) {
+              setErr("Connection lost — the phone left or the network changed.");
+              setPhase("error");
+            }
+          }, 5000);
         }
       };
       pc.onconnectionstatechange = onIceState;
@@ -438,11 +514,95 @@ function LogPanel() {
   );
 }
 
+/* Live counters — big numbers consistent with the Dashboard's persistent picture */
+function LiveStats() {
+  const { state } = useApp();
+  const s = state?.stats || {};
+  const results = useFetch("/api/results");
+  const rows = results.data || [];
+  const pcts = rows.map((r) => Number(r?.Percent ?? r?.percent)).filter(Number.isFinite);
+  const mean = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : 0;
+  const kpi = [
+    [rows.length, "Graded", "", "ok"],
+    [mean, "Mean score", "%", "brand"],
+    [s.pending_review || 0, "Awaiting review", "", "warn"],
+    [s.rejected || 0, "Rejected", "", "ink"],
+  ];
+  const tone = { brand: "text-brand", ok: "text-ok", warn: "text-warn", ink: "text-ink" };
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      {kpi.map(([v, label, suffix, t]) => (
+        <div key={label} className="panel glass px-5 py-4">
+          <span className={`block text-[30px] font-extrabold leading-none ${tone[t]}`}>
+            <AnimatedNum value={v} />{suffix}</span>
+          <span className="block pt-1.5 text-[11.5px] font-bold text-ink3">{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* State-aware header: one obvious next action */
+function SessionHeader() {
+  const { state, goto } = useApp();
+  const s = state?.server || {};
+  const pending = state?.stats?.pending_review || 0;
+  const test = state?.test;
+  let verb, sub, icon;
+  if (!test) {
+    verb = "Create a test"; sub = "Set questions, options and the answer key.";
+    icon = <Plus size={15} />;
+  } else if (!s.running) {
+    verb = "Share the scan link"; sub = "Start the server to show the QR code.";
+    icon = <Play size={15} />;
+  } else if (pending > 0) {
+    verb = `Review ${pending} flagged sheet${pending > 1 ? "s" : ""}`;
+    sub = "One human look, then it exports.";
+    icon = <ListChecks size={15} />;
+  } else {
+    verb = "Scan link live"; sub = "Sheets stream in and grade automatically.";
+    icon = <Radio size={15} />;
+  }
+  const act = () => !test ? goto("setup") : (!s.running ? null : pending > 0
+    ? goto("review") : null);
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="min-w-0">
+        <h1 className="text-[20px] font-bold leading-tight tracking-[-0.015em] text-ink">
+          {verb}</h1>
+        <p className="text-[13px] text-ink3">{sub}</p>
+      </div>
+      {act && (
+        <button onClick={act}
+          className={`focusable btn-hov ml-auto inline-flex items-center gap-2 rounded-xl
+            px-4 py-2.5 text-[13px] font-extrabold text-white
+            ${pending > 0 ? "bg-warn" : "bg-brand"} disabled:opacity-50`}>
+          {icon}{verb}<ArrowRight size={14} />
+        </button>)}
+    </div>
+  );
+}
+
 export default function Serve() {
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,370px)_minmax(0,1fr)]">
-      <div className="space-y-4"><QrPanel/></div>
-      <div className="space-y-4"><KeyCard/><CameraPanel/><MirrorPanel/><LogPanel/></div>
+    <div className="space-y-4">
+      <SessionHeader />
+      <LiveStats />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,.85fr)]">
+        <QrPanel />
+        <div className="space-y-4">
+          <KeyCard />
+          <Accordion title="Desktop camera" icon={Cable}>
+            <CameraPanel />
+          </Accordion>
+          <Accordion title="Phone mirror" icon={MonitorUp}>
+            <MirrorPanel />
+          </Accordion>
+          <Accordion title="Activity log" icon={Activity} defaultOpen>
+            <LogPanel />
+          </Accordion>
+        </div>
+      </div>
     </div>
   );
 }

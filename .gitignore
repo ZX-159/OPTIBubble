@@ -6,9 +6,21 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# Tauri / Rust
+# Tauri / Rust build output
 src-tauri/target/
 src-tauri/gen/
+
+# PyInstaller engine freeze + workdir (build artifacts, built in CI)
+src-tauri/engine/*
+!src-tauri/engine/.gitkeep
+build-engine/
+build-engine-*/
+*.spec.bak
+
+# React SPA build output (built by the CI job before selftest / bundling)
+optibubble/web/dist/
+frontend/dist/
+frontend/node_modules/
 
 # OS
 .DS_Store

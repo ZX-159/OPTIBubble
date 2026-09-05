@@ -171,26 +171,44 @@ class Hub:
         return p if p.exists() else None
 
     def update_key(self, entries: dict, replace: bool = False) -> bool:
-        """Merge (or replace) answer-key entries in the active test."""
+        """Merge (or replace) answer-key entries in the active test.
+
+        Returns True if at least one valid entry was applied. Letters outside
+        the test's allowed options and out-of-range questions are silently
+        dropped (not rejected) so a partial key can still be edited — but the
+        count is surfaced in the log so the UI can warn about dropped entries.
+        """
         if not self.test:
             return False
         k = self.test.options_per_question
         letters = "ABCDEFGHIJ"[:k]
         if replace:
             self.test.answer_key = {}
+        applied = dropped = 0
         for q, a in (entries or {}).items():
             try:
                 qn = int(q)
             except (TypeError, ValueError):
+                dropped += 1
                 continue
             if 1 <= qn <= self.test.num_questions and a in letters:
                 self.test.answer_key[qn] = a
+                applied += 1
+            else:
+                dropped += 1
         self.storage.save_test(self.test, self.layout)
         complete = len(self.test.answer_key) >= self.test.num_questions
+        note = ""
+        if dropped:
+            allowed = f"A-{letters[-1]}"
+            note = (f" · {dropped} entr{'y' if dropped == 1 else 'ies'} skipped "
+                    f"(valid: {allowed}, questions 1-{self.test.num_questions})")
         self.log(f"Answer key updated — {len(self.test.answer_key)}/"
-                 f"{self.test.num_questions} defined"
+                 f"{self.test.num_questions} defined{note}"
                  + ("" if complete else " (grading scores defined questions only)"))
-        return True
+        # True when anything was applied, or when there was nothing to apply
+        # (a no-op save still "succeeds").
+        return applied > 0 or not (entries or {})
 
     # ------------------------------------------------------------- management
     EDITABLE_FIELDS = ("title", "subject", "sheet_instructions",
@@ -283,21 +301,60 @@ class Hub:
 
     # ------------------------------------------------------------------ server
     def lan_ips(self) -> List[str]:
+        """Best-effort enumeration of the machine's IPv4 LAN addresses.
+
+        Avoids the classic `connect(("8.8.8.8", 80))` trick, which only works
+        when a default route exists — on an offline box it throws, so the QR
+        link would fall back to 127.0.0.1 and be unreachable by phones. We
+        enumerate hostname-based AND socket-interface addresses instead.
+        """
         ips: List[str] = []
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(0.3)
-            s.connect(("8.8.8.8", 80))     # no packets actually sent
-            ips.append(s.getsockname()[0])
-            s.close()
-        except Exception:
-            pass
+        # 1 · hostname A-records (works without a default route)
         try:
             for info in socket.getaddrinfo(socket.gethostname(), None,
                                            socket.AF_INET):
                 ip = info[4][0]
                 if ip not in ips and not ip.startswith("127."):
                     ips.append(ip)
+        except Exception:
+            pass
+        # 2 · actual interface-bound sockets (catches addresses a hostname
+        #     lookup misses, incl. multi-homed machines)
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # connect to a route-independent, non-routable address so the OS
+            # just picks an interface without sending anything
+            s.connect(("10.255.255.255", 1))
+            ip = s.getsockname()[0]
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+            s.close()
+        except Exception:
+            pass
+        # 3 · platform interface enumeration (Windows / macOS / Linux)
+        try:
+            import platform
+            if platform.system() == "Windows":
+                import subprocess
+                out = subprocess.run(
+                    ["ipconfig"], capture_output=True, text=True, timeout=4
+                ).stdout
+                import re
+                for m in re.finditer(r"IPv4 Address[^:]*:\s*([0-9.]+)", out):
+                    ip = m.group(1)
+                    if ip not in ips and not ip.startswith("127.") and ip != "0.0.0.0":
+                        ips.append(ip)
+            else:
+                import subprocess
+                out = subprocess.run(
+                    ["ip", "-4", "addr", "show"], capture_output=True,
+                    text=True, timeout=4
+                ).stdout
+                import re
+                for m in re.finditer(r"inet\s+([0-9.]+)/", out):
+                    ip = m.group(1)
+                    if ip not in ips and not ip.startswith("127.") and ip != "0.0.0.0":
+                        ips.append(ip)
         except Exception:
             pass
         return ips or ["127.0.0.1"]
@@ -541,6 +598,10 @@ class Hub:
                          else " (install code A once)")
             self.log(f"🔒 HTTPS bridge ready on :{self.settings.https_port}"
                      f"{host_note}")
+            # Always arm the renewal watcher on the HTTPS listener, not just
+            # after a manual re-issue. A fresh cold start whose cert isn't yet
+            # near expiry would otherwise never run it and lapse mid-lesson.
+            self._start_renewal_monitor()
         except Exception as e:
             self._https_server = None
             self.log(f"⚠ HTTPS bridge unavailable ({e}) — the scanner falls "
@@ -557,6 +618,32 @@ class Hub:
             self._https_server = None
         if self._flask_app is not None:
             self._start_https(self._flask_app)
+        self._start_renewal_monitor()
+
+    def _start_renewal_monitor(self) -> None:
+        """Watch the trusted cert and renew ~30 days before expiry so a
+        long-running server never lets the Let's Encrypt cert lapse. Renewal
+        used to run only at server start, which was fine for short sessions
+        but let a weeks-long classroom server expire mid-lesson."""
+        if getattr(self, "_renew_mon", None) and self._renew_mon.is_alive():
+            return
+        from .acme import trusted_cert_valid
+
+        def monitor() -> None:
+            while True:
+                time.sleep(6 * 3600)          # every 6 hours
+                if not self._https_server:
+                    break
+                if (self.settings.https_mode == "letsencrypt"
+                        and self.settings.acme_domain
+                        and not trusted_cert_valid(self.trusted_cert_paths()[0], 30)):
+                    self.log("🔒 trusted certificate near expiry — renewing "
+                             "in the background")
+                    self.provision_trusted()
+
+        self._renew_mon = threading.Thread(target=monitor, name="optibubble-renew",
+                                           daemon=True)
+        self._renew_mon.start()
 
     def stop_server(self) -> None:
         if self._https_server is not None:
@@ -608,14 +695,27 @@ class Hub:
                     self.receipts.pop(stale, None)
             self.receipts[rid] = {"status": "queued", "result": None, "error": None}
         self.stats["sheets_received"] += 1
-        self._pool.submit(self._process, rid, data)
+        # Snapshot the active test + layout + storage root NOW. If the teacher
+        # opens another test while this sheet is queued/processing, the worker
+        # must grade against the session it was scanned for, not the current one.
+        self._pool.submit(self._process, rid, data,
+                          self.test, self.layout,
+                          self.storage.test_root(self.test) if self.test else None)
         return rid, None
 
     def get_receipt(self, rid: str) -> dict:
         with self._receipt_lock:
             return dict(self.receipts.get(rid) or {"status": "unknown"})
 
-    def _process(self, rid: str, data: bytes) -> None:
+    def _process(self, rid: str, data: bytes, test=None, layout=None,
+                 test_root=None) -> None:
+        # `test` / `layout` / `test_root` are the snapshot captured at upload
+        # time by accept_upload; fall back to the live state for callers that
+        # submit directly (e.g. the self-test's psychometrics loop).
+        test = test or self.test
+        layout = layout or self.layout
+        if test_root is None:
+            test_root = self.storage.test_root(test) if test else None
         with self._receipt_lock:
             self.receipts.setdefault(rid, {"status": "queued", "result": None,
                                            "error": None})
@@ -629,13 +729,12 @@ class Hub:
                                                  "hint": hint})
             self.emit("sheet_rejected", code=code, message=message)
 
-        if not self.test or not self.layout:
+        if not test or not layout or not test_root:
             fail("NO_TEST", "No active test on the desktop side.")
             return
         try:
-            result = grade_photo(data, self.layout, self.test, self.settings,
-                                 self.storage.test_root(self.test),
-                                 debug_dir=self.storage.test_root(self.test) / "debug")
+            result = grade_photo(data, layout, test, self.settings, test_root,
+                                 debug_dir=test_root / "debug")
         except OMRReject as e:
             fail(e.code, e.message, e.hint)
             return
@@ -643,15 +742,15 @@ class Hub:
             fail("ENGINE_ERROR", "Processing failed on the desktop.", str(e))
             return
 
-        sheet_path = self.storage.save_sheet_image(self.test, data, result.sheet_id)
-        rel_image = str(sheet_path.relative_to(self.storage.test_root(self.test)))
+        sheet_path = self.storage.save_sheet_image(test, data, result.sheet_id)
+        rel_image = str(sheet_path.relative_to(test_root))
 
         if result.status == "auto":
-            self.storage.append_result(self.test, result, rel_image,
+            self.storage.append_result(test, result, rel_image,
                                        master=self.settings.master_csv)
             self.stats["auto_graded"] += 1
         else:
-            self.storage.queue_for_review(self.test, result, rel_image)
+            self.storage.queue_for_review(test, result, rel_image)
             self.stats["flagged"] += 1
 
         sid = result.student_id.strip("?")
@@ -664,6 +763,8 @@ class Hub:
         with self._receipt_lock:
             self.receipts[rid].update(status="done", result=result.summary())
 
+        # Desktop camera frames are graded via accept_upload with a synthetic
+        # session; guard the event/emit against a test that was switched away.
         self.emit("sheet_graded" if result.status == "auto" else "sheet_flagged",
                   result=result, image=rel_image)
 
@@ -683,8 +784,19 @@ class Hub:
             if student_id is not None:
                 res.student_id = student_id
             res.flags = []
-            res.score = sum(1 for q, a in res.answers.items()
-                            if a and self.test.answer_key.get(int(q)) == a)
+            # Honour per-question weights and partial-credit fractions when a
+            # human confirms a flagged sheet. Previously this rescored as
+            # 1 point per correct answer, corrupting Total_Score / Percent for
+            # any weighted test (e.g. "5:2, 9-12:3").
+            total = 0.0
+            for q in res.answers:
+                a = res.answers[q]
+                if a and self.test.answer_key.get(int(q)) == a:
+                    total += self.test.weight_for(int(q))          # confirmed correct
+                elif q in res.partials:
+                    total += self.test.partial_multi_credit * self.test.weight_for(int(q))
+                # otherwise wrong / blank → 0
+            res.score = total
             self.storage.resolve_review(self.test, sheet_id, res, item.get("source_image", ""))
             self.emit("review_resolved", sheet_id=sheet_id, score=res.score,
                       student_id=res.student_id)

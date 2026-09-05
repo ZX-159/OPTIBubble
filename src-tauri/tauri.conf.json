@@ -1,24 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OPTIBubble",
-  "version": "1.9.1",
-  "identifier": "com.optibubble.app",
+  "version": "2.0.0",
+  "identifier": "com.optibubble.desktop",
   "build": {
     "frontendDist": "../optibubble/web"
   },
   "app": {
-    "windows": [
-      {
-        "title": "OPTIBubble \u2014 Scan. Grade. Done.",
-        "url": "http://127.0.0.1:5000/",
-        "width": 1300,
-        "height": 860,
-        "minWidth": 1020,
-        "minHeight": 700,
-        "center": true,
-        "dragDropEnabled": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

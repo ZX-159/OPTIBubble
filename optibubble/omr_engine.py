@@ -134,12 +134,88 @@ def order_corners(pts: np.ndarray) -> Tuple[np.ndarray, float]:
     return ordered, (w / h if h > 0 else 0.0)
 
 
+def _candidate_squares(bw: np.ndarray, img_area: float,
+                       relaxed: bool = False) -> List[Tuple[float, np.ndarray]]:
+    """Scan a binarised image for solid, roughly-square 4-gon contours.
+
+    ``relaxed`` widens the area / aspect / extent windows for the fallback
+    passes used when the primary (Otsu) detection is defeated by glare or a
+    shadow crossing a corner — it only ever runs after the strict pass failed,
+    so it can never disturb a clean detection.
+    """
+    contours, _ = cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    if relaxed:
+        area_lo, area_hi = 0.00006 * img_area, 0.028 * img_area
+        ar_lo, ar_hi, extr = 0.40, 2.2, 0.60
+    else:
+        area_lo, area_hi = 0.00008 * img_area, 0.02 * img_area
+        ar_lo, ar_hi, extr = 0.55, 1.8, 0.72
+    cands: List[Tuple[float, np.ndarray]] = []
+    for cnt in contours:
+        a = cv2.contourArea(cnt)
+        if not (area_lo < a < area_hi):
+            continue
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
+        if len(approx) != 4:
+            continue
+        x, y, w, h = cv2.boundingRect(approx)
+        if w == 0 or h == 0:
+            continue
+        aspect = w / float(h)
+        if not (ar_lo < aspect < ar_hi):
+            continue
+        extent = a / float(w * h)                 # solid squares only
+        if extent < extr:
+            continue
+        M = cv2.moments(approx)
+        if M["m00"] == 0:
+            continue
+        cx, cy = M["m10"] / M["m00"], M["m01"] / M["m00"]
+        cands.append((a, np.array([cx, cy], dtype=np.float32)))
+    return cands
+
+
+def _select_quad(cands: List[Tuple[float, np.ndarray]]
+                 ) -> Optional[np.ndarray]:
+    """Pick the most page-like quadrilateral from anchor-square candidates.
+
+    Returns ordered (TL, TR, BR, BL) corners or ``None`` if no 4-point
+    combination looks like the printed sheet.  Shared by every detection
+    pass so the geometry sanity checks are identical.
+    """
+    if len(cands) < 4:
+        return None
+    cands = sorted(cands, key=lambda t: -t[0])[:12]
+    best, best_area = None, -1.0
+    for combo in itertools.combinations(range(len(cands)), 4):
+        pts = np.array([cands[i][1] for i in combo], dtype=np.float32)
+        ordered, aspect = order_corners(pts)
+        if not (0.52 < aspect < 1.15):            # portrait page-ish (A4 = 0.707)
+            continue
+        tl, tr, br, bl = ordered
+        d1 = np.linalg.norm(tl - br)
+        d2 = np.linalg.norm(tr - bl)
+        if d2 == 0 or abs(d1 - d2) / max(d1, d2) > 0.30:   # diagonals ≈ equal
+            continue
+        area = d1 * d2 / 2
+        if area > best_area:
+            best, best_area = ordered, area
+    return best
+
+
 def find_page_corners(gray: np.ndarray) -> np.ndarray:
     """Locate the four alignment squares. Returns ordered (TL,TR,BR,BL).
 
     Detection runs on a ≤1700 px raster for speed (all filters are relative
     to image area, so results transfer), and the corners are mapped back to
     full resolution.
+
+    Three passes, in order of strictness — the first unambiguously-clean
+    geometry wins, so a good photo is never affected:
+      1. CLAHE + Otsu  (the original, fastest path for well-lit sheets),
+      2. adaptive threshold + morphological close      (glare / hard shadow),
+      3. relaxed filters on the adaptive threshold     (folded corner, low ink).
     """
     h, w = gray.shape[:2]
     detect_scale = 1.0
@@ -150,65 +226,39 @@ def find_page_corners(gray: np.ndarray) -> np.ndarray:
     else:
         small = gray
 
-    # CLAHE equalises harsh illumination gradients before binarisation, so a
-    # shadow across one corner cannot hide or merge the alignment squares
     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-    blur = cv2.GaussianBlur(clahe.apply(small), (5, 5), 0)
+    ceq = clahe.apply(small)
+    blur = cv2.GaussianBlur(ceq, (5, 5), 0)
+    img_area = float(small.shape[0] * small.shape[1])
+
+    # ---- pass 1: Otsu on CLAHE (strict) -----------------------------------
     _, bw = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    best = _select_quad(_candidate_squares(bw, img_area))
+    if best is not None:
+        return best / detect_scale
 
-    contours, _ = cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    img_area = small.shape[0] * small.shape[1]
-    cands = []
-    for cnt in contours:
-        a = cv2.contourArea(cnt)
-        if not (0.00008 * img_area < a < 0.02 * img_area):
-            continue
-        peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
-        if len(approx) != 4:
-            continue
-        x, y, w, h = cv2.boundingRect(approx)
-        if w == 0 or h == 0:
-            continue
-        aspect = w / float(h)
-        if not (0.55 < aspect < 1.8):
-            continue
-        extent = a / float(w * h)
-        if extent < 0.72:            # solid squares only
-            continue
-        M = cv2.moments(approx)
-        cx, cy = M["m10"] / M["m00"], M["m01"] / M["m00"]
-        cands.append((a, np.array([cx, cy], dtype=np.float32)))
+    # ---- pass 2: adaptive threshold + close (glare / directional shadow) ---
+    bw2 = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                cv2.THRESH_BINARY_INV, 41, 9)
+    # close small gaps so a glare-split anchor square reconnects into one blob
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    bw2 = cv2.morphologyEx(bw2, cv2.MORPH_CLOSE, kernel, iterations=1)
+    best = _select_quad(_candidate_squares(bw2, img_area))
+    if best is not None:
+        return best / detect_scale
 
-    if len(cands) < 4:
-        raise OMRReject(
-            "ANCHORS_NOT_FOUND",
-            "Could not find the four corner squares.",
-            "Frame the whole sheet, keep it flat and evenly lit, avoid shadows "
-            "over the corners.")
+    # ---- pass 3: relaxed filters (folded corner / low contrast) -----------
+    # A worn or fold-darkened corner can shrink below the strict area floor;
+    # widen the windows and drop the "solid" extent requirement a little.
+    best = _select_quad(_candidate_squares(bw2, img_area, relaxed=True))
+    if best is not None:
+        return best / detect_scale
 
-    cands.sort(key=lambda t: -t[0])
-    cands = cands[:10]
-
-    best, best_area = None, -1.0
-    for combo in itertools.combinations(range(len(cands)), 4):
-        pts = np.array([cands[i][1] for i in combo], dtype=np.float32)
-        ordered, aspect = order_corners(pts)
-        if not (0.52 < aspect < 1.15):        # portrait page-ish (A4 = 0.707)
-            continue
-        tl, tr, br, bl = ordered
-        d1 = np.linalg.norm(tl - br)
-        d2 = np.linalg.norm(tr - bl)
-        if d2 == 0 or abs(d1 - d2) / max(d1, d2) > 0.30:   # diagonals ≈ equal
-            continue
-        area = d1 * d2 / 2
-        if area > best_area:
-            best, best_area = ordered, area
-    if best is None:
-        raise OMRReject(
-            "ANCHORS_NOT_FOUND", "Alignment squares found but geometry is wrong.",
-            "Shoot straight down; avoid tilted or curved paper.")
-    return best / detect_scale          # map corners back to full resolution
+    raise OMRReject(
+        "ANCHORS_NOT_FOUND",
+        "Could not find the four corner squares.",
+        "Frame the whole sheet, keep it flat and evenly lit, avoid shadows "
+        "over the corners. In very low light use the torch button.")
 
 
 # ----------------------------------------------------------------------------
@@ -315,12 +365,16 @@ def relative_map(lay: SheetLayout, gray_map: Dict[str, float],
 
 def stroke_coverage(warped_gray: np.ndarray, lay: SheetLayout, b,
                     white_ref: float, anchor_black: float,
-                    s: AdvancedSettings) -> float:
+                    s: AdvancedSettings, dark_threshold: Optional[float] = None) -> float:
     """Largest connected dark component inside the bubble disc (CCA).
 
     An intentional pen/pencil stroke is one large connected blob; a printer
     smudge or a dust speck is many tiny ones.  Returns the largest component's
     area as a fraction of the sampled disc.
+
+    ``dark_threshold`` is the per-photo Otsu cut (after ``dark_threshold_offset``)
+    so the Settings → OMR "binarisation offset" fine-tune actually takes effect
+    here instead of being computed and discarded.
     """
     scale = s.warp_width_px / lay.page_w
     cx, cy, r = b.cx * scale, b.cy * scale, b.r * scale * 0.95
@@ -329,7 +383,10 @@ def stroke_coverage(warped_gray: np.ndarray, lay: SheetLayout, b,
     if x1 <= x0 or y1 <= y0:
         return 0.0
     roi = warped_gray[y0:y1, x0:x1]
-    t = white_ref - 0.35 * max(white_ref - anchor_black, 12.0)
+    if dark_threshold is not None:
+        t = float(dark_threshold)
+    else:
+        t = white_ref - 0.35 * max(white_ref - anchor_black, 12.0)
     mask = (roi < t).astype(np.uint8)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     h, w = roi.shape
@@ -423,7 +480,7 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
             raise OMRReject("WARP_FAILED", "Page alignment check failed.",
                             "Flatten the sheet and reshoot from directly above.")
 
-    gray_map, anchor_black, _th = measure_bubbles(wgray, lay, s)
+    gray_map, anchor_black, dark_th = measure_bubbles(wgray, lay, s)
     rel = relative_map(lay, gray_map, anchor_black)
 
     if s.save_debug_warp and debug_dir is not None:
@@ -470,14 +527,26 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
     answers: Dict[int, Optional[str]] = {}
     correct: Dict[int, bool] = {}
 
+    # A per-mark connectivity fallback.  ``cov`` is the largest connected dark
+    # component inside the bubble disc — a real pen/pencil stroke is one solid
+    # blob; a smudge or dust is many tiny ones.  It drives two decisions:
+    #    * an *ok* mark whose ink is mostly disconnected specks is really a
+    #      smudge → demote to ``faint`` so it goes to review, and
+    #    * a *faint* mark that is actually a solid, clearly-winning stroke (a
+    #      light pen that still fills the bubble) is a confident answer → it is
+    #      auto-graded instead of being sent for a human look.
+    # The two gates are the net: Q19-style partial strips (cov ≈ 0.5) stay in
+    # Review, while a genuinely-marks-the-bubble light stroke (cov ≥ 0.72) is
+    # accepted.  Both use the Settings→OMR "binarisation offset".
+    AUTO_HEAL_CONF = 0.50          # leading bubble must be a clear winner
+    AUTO_HEAL_COV = 0.72           # …and mostly cover its bubble (solid stroke)
+
     for qn in range(1, lay.num_questions + 1):
         dens = [rel.get(f"o{qn}:{oi}", 0.0) for oi in range(lay.options_per_question)]
         marked, status, conf = _decide_group(dens, s.t_blank, s.t_fill,
                                              s.faint_upper, s.multi_ratio)
 
-        # CCA guard: a “filled” score made of disconnected specks is a smudge,
-        # not a stroke — send it to review instead of grading it
-        if status == "ok" and marked is not None:
+        if status in ("ok", "faint") and marked is not None:
             blk_q = lay.question_block(qn)
             if blk_q is not None:
                 white_ref = max(gray_map.get(f"o{qn}:{oi}", 255.0)
@@ -486,9 +555,12 @@ def grade_photo(data: bytes, lay: SheetLayout, test: TestConfig,
                               if bb.kind == "option" and bb.q == qn
                               and bb.option == marked)
                 cov = stroke_coverage(wgray, lay, b_mark, white_ref,
-                                      anchor_black, s)
-                if cov < 0.12:
-                    status = "faint"
+                                      anchor_black, s, dark_th)
+                if status == "ok" and cov < 0.12:
+                    status = "faint"                # disconnected specks → smudge
+                elif status == "faint" and conf >= AUTO_HEAL_CONF \
+                        and cov >= AUTO_HEAL_COV:
+                    status = "ok"                   # light but solid → auto-grade
 
         # double-mark that still contains the key + partial credit policy →
         # award the fraction automatically instead of flagging

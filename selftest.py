@@ -494,6 +494,12 @@ def main() -> int:
     check("local CA auto-generated on start",
           (hub.data_dir / "certs" / "optibubble-ca.crt").exists()
           and hub.https_running)
+    # HTTPS renewal must be armed on a COLD start, not just after a manual
+    # re-issue (regression: a fresh long-running server used to lapse its cert)
+    check("HTTPS renewal monitor armed on cold start",
+          getattr(hub, "_renew_mon", None) is not None
+          and hub._renew_mon.is_alive(),
+          f"thread {'alive' if getattr(hub, '_renew_mon', None) and hub._renew_mon.is_alive() else 'dead'}")
     ca_ctx = _ssl.create_default_context(
         cafile=str(hub.data_dir / "certs" / "optibubble-ca.crt"))
     r = _urlreq.urlopen(f"https://127.0.0.1:{hub.settings.https_port}/health",
@@ -573,6 +579,14 @@ def main() -> int:
         "4": "D", "5": "A", "6": "B", "7": "C", "8": "D"}})
     check("define key later via /api/key",
           r.status_code == 200 and r.get_json().get("defined") == 8)
+
+    # pasted key text must respect options_per_question and never silently drop
+    # a letter without surfacing it (regression: [A-J] regex + silent skip)
+    _tk = TestConfig(num_questions=10, options_per_question=4)
+    _tk.parse_key_text("1:A 2:F 3:C 7:G")
+    check("key text respects options_per_question + reports dropped",
+          _tk.answer_key == {1: "A", 3: "C"} and _tk.last_key_dropped == 2,
+          f"key={dict(sorted(_tk.answer_key.items()))} dropped={_tk.last_key_dropped}")
 
     # header collisions impossible across layout variants
     from optibubble.layout import LayoutError as _LE
@@ -734,6 +748,28 @@ def main() -> int:
           and rw.status == "auto" and rw.partials == [3],
           f"{rw.score}/{rw.max_score} partials={rw.partials}")
 
+    # human-confirming a FLAGGED sheet must honour per-question weights
+    # (regression: this used to rescore as 1 point per correct answer)
+    from optibubble.omr_engine import GradeResult as _GR
+    import csv as _csv
+    _hr = Hub(data_dir=tmp / "hub_resolve")
+    _hw = _TC(title="Weighted Review", num_questions=4, options_per_question=4,
+              student_id_digits=0, weights={2: 5.0, 3: 3.0, 4: 2.0},
+              answer_key={1: "A", 2: "B", 3: "C", 4: "B"})
+    _hw.ensure_ids()
+    _hr.create_test(_hw, generate_pdf=False)
+    _fr = _GR(sheet_id="abc123", ts="2026-01-01 00:00:00",
+              answers={1: "A", 2: "X", 3: "C", 4: "B"},
+              correct={1: True, 2: False, 3: True, 4: True},
+              score=0, max_score=12.0, status="review")
+    _hr.storage.queue_for_review(_hw, _fr, source_image="")
+    _ok = _hr.resolve_flagged("abc123", answers={2: "B"}, student_id=None)
+    _rows = list(_csv.DictReader((_hr.storage.test_root(_hw) /
+                                  "results.csv").open()))
+    _score = float(_rows[0]["Total_Score"])
+    check("review resolve honours weighted scoring (4×1 + 5 + 3 + 2)",
+          _ok and abs(_score - 11.0) < 1e-9, f"score {_score}/12.0")
+
     # analytics: KR-20 with a known-perfect separation → 1.0
     hub.settings.partial_multi_credit = 0
     from optibubble.server import create_app as _caf
@@ -813,6 +849,46 @@ def main() -> int:
         check("archive: name collision guarded", False)
     except ValueError as e:
         check("archive: name collision guarded", "already exists" in str(e))
+
+    # archive entries that escape the tests dir via ../ or absolute paths must
+    # be blocked (regression: a sibling-prefix `startswith` check let them slip)
+    import zipfile as _zf
+    _esc = io.BytesIO()
+    with _zf.ZipFile(_esc, "w") as _z:
+        _z.writestr("X/test.json", "{}")
+        _z.writestr("../escape_evil/x", "x")
+    _esc.seek(0)
+    try:
+        restore_archive(_esc.getvalue(), "", tmp / "arch_slip")
+        check("archive: ../ path traversal blocked", False)
+    except ValueError:
+        check("archive: ../ path traversal blocked", True)
+    _esc2 = io.BytesIO()
+    with _zf.ZipFile(_esc2, "w") as _z2:
+        _z2.writestr("/tmp/abs_evil/x", "x")
+    _esc2.seek(0)
+    try:
+        restore_archive(_esc2.getvalue(), "", tmp / "arch_abs")
+        check("archive: absolute-path entry blocked", False)
+    except ValueError:
+        check("archive: absolute-path entry blocked", True)
+
+    # stray image data is stored under its real container extension
+    from optibubble.storage import _sniff_image_ext as _sniff
+    check("image ext sniff (jpg/png/webp)",
+          _sniff(b"\xff\xd8\xff\xe0") == "jpg"
+          and _sniff(b"\x89PNG\r\n\x1a\n") == "png"
+          and _sniff(b"RIFF\x00\x00\x00\x00WEBP") == "webp")
+
+    # local CA must not silently regenerate when one half of the keypair is lost
+    from optibubble.localca import ensure_ca as _ensure_ca
+    _cd = tmp / "ca_half"; _cd.mkdir()
+    (_cd / "optibubble-ca.crt").write_text("corrupt")
+    try:
+        _ensure_ca(_cd)
+        check("local CA refuses to regenerate from a single file", False)
+    except RuntimeError:
+        check("local CA refuses to regenerate from a single file", True)
 
     # restore endpoint: encrypted archive without password → clear error
     from io import BytesIO as _BIO

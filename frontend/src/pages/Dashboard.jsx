@@ -1,312 +1,383 @@
-import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { ArchiveRestore, ArrowRight, FileText, Pencil, Plus, Trash2, Upload } from "lucide-react";
-import { api } from "../lib/api";
-import { useApp, } from "../App";
+import React, { memo, useMemo } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import {
+  AlertTriangle, ArrowRight, Check, CircleCheck, FileCheck2, Gauge, History,
+  Inbox, Layers, ListChecks, Plus, QrCode, Send, ShieldAlert, Sparkles,
+  Target, TrendingUp, XCircle, Zap,
+} from "lucide-react";
+import { useApp } from "../App";
 import { useFetch } from "../lib/hooks";
-import { AnimatedNum, Badge, Button, Card, EmptyState, ErrorState, Field,
-         IconButton, Input, Modal, Skeleton, useToast, spring } from "../components/ui";
+import { AnimatedNum, Button, Card, EmptyState, ErrorState,
+         Skeleton, spring, softSpring } from "../components/ui";
+import { Spark, RadialGauge, ScoreHistogram, DiffBars } from "../components/charts";
 
-const STATS = [
-  ["sheets_received", "Sheets received", "text-brandhi"],
-  ["auto_graded", "Auto-graded", "text-ok"],
-  ["pending_review", "Awaiting review", "text-warn"],
-  ["exported", "Exported to CSV", "text-[#C4B5FD]"],
-];
+/* ------------------------------------------------------------------ helpers */
+const fmtTime = (ts) => {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const s = (new Date() - d) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
 
+/* ------------------------------------------------------------------ KPI card
+   Premium dashboard tile: icon chip + context caption, big animated numeral,
+   label, then a real sparkline that reflects the actual data shape. */
+const Kpi = memo(function Kpi({ label, value, suffix, sub, icon: Icon, tone,
+  accent, spark, sparkColor, onTap }) {
+  return (
+    <motion.button onClick={onTap}
+      variants={{ show: { opacity: 1, y: 0, transition: softSpring } }}
+      className="group flex h-full w-full flex-col overflow-hidden rounded-card
+        border border-hair bg-[var(--bg1)] p-5 text-left transition-[box-shadow,transform]
+        duration-200 focusable hov"
+      style={{ boxShadow: "var(--shadow-card)" }}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${accent}`}>
+          <Icon size={19} />
+        </span>
+        {sub && <span className="pointer-events-none mt-0.5 max-w-[58%] truncate
+          text-right text-[11px] font-bold text-ink3">{sub}</span>}
+      </span>
+      <span className={`mt-4 block text-[38px] font-extrabold leading-none
+        tracking-[-0.02em] ${tone}`}><AnimatedNum value={value} />{suffix}</span>
+      <span className="mt-1.5 block text-[12.5px] font-extrabold text-ink2">{label}</span>
+      {spark?.length > 1 && (
+        <span className="mt-auto block w-full pl-1 pt-3">
+          <Spark data={spark} color={sparkColor} height={34} />
+        </span>
+      )}
+    </motion.button>
+  );
+});
+
+/* ------------------------------------------------------------------ analytics */
+function AnalyticsCard({ data, loading, error, reload }) {
+  if (loading && !data) return <div className="space-y-2">{[
+    0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" /> )}</div>;
+  if (error) return <ErrorState error={error} onRetry={() => reload()} />;
+  if (!data || data.n < 2 || !data.questions?.length) {
+    return <div className="flex h-full min-h-[200px] items-center justify-center">
+      <EmptyState icon={Gauge} title="At least 2 graded sheets">
+        KR-20 reliability and question analytics unlock once 2+ sheets are graded.</EmptyState>
+    </div>;
+  }
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-4">
+        <RadialGauge value={data.kr20} tone={
+          data.kr20 >= 0.8 ? "var(--ok)" : data.kr20 >= 0.6 ? "var(--warn)" : "var(--err)"}
+          size={116} />
+        <div className="min-w-0 flex-1">
+          <b className="block text-[14px] leading-tight text-ink">KR-20 reliability</b>
+          <span className="text-[11.5px] text-ink3">{data.n} graded · {
+            data.kr20 >= 0.8 ? "strong" : data.kr20 >= 0.6 ? "moderate" : "low"} consistency</span>
+          <div className="mt-2 space-y-1 text-[11px] text-ink3">
+            <div className="flex justify-between"><span>Mean</span>
+              <b className="tnum text-ink2">{data.mean}</b></div>
+            <div className="flex justify-between"><span>Median</span>
+              <b className="tnum text-ink2">{data.median}</b></div>
+            <div className="flex justify-between"><span>σ Dev</span>
+              <b className="tnum text-ink2">{data.stdev}</b></div>
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 border-t border-hair pt-3">
+        <p className="mb-2.5 text-[11px] font-extrabold uppercase tracking-[.12em]
+          text-ink3">Hardest questions <span className="font-mono normal-case tracking-normal">
+            · D = discrimination</span></p>
+        <DiffBars questions={data.questions} max={4} />
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ recent activity */
+const EV = {
+  server_started: { icon: Zap, tone: "bg-okdim text-ok", label: "Session live",
+    text: (e) => "Submission server is running" },
+  sheet_graded: { icon: CircleCheck, tone: "bg-okdim text-ok", label: "Auto-graded",
+    text: (e) => `${e.result?.student_id || "sheet"} got ${e.result?.score}/${e.result?.max}` },
+  sheet_flagged: { icon: ShieldAlert, tone: "bg-warndim text-warn", label: "Needs review",
+    text: (e) => `${e.result?.student_id || "sheet"} flagged (${e.result?.flags?.length || 0} issue${(e.result?.flags?.length || 0) === 1 ? "" : "s"})` },
+  review_resolved: { icon: Check, tone: "bg-branddim text-brand", label: "Review resolved",
+    text: (e) => `${e.student_id || e.sheet_id} confirmed at ${e.score}` },
+  review_discarded: { icon: XCircle, tone: "bg-[var(--bg3)] text-ink3", label: "Discarded",
+    text: (e) => `review ${e.sheet_id}` },
+  sheet_rejected: { icon: AlertTriangle, tone: "bg-errdim text-err", label: "Rejected",
+    text: (e) => e.message || "sheet could not be graded" },
+  test_created: { icon: Plus, tone: "bg-branddim text-brand", label: "Test created",
+    text: (e) => e.title },
+  test_opened: { icon: Layers, tone: "bg-branddim text-brand", label: "Test opened",
+    text: (e) => e.title },
+  server_stopped: { icon: XCircle, tone: "bg-[var(--bg3)] text-ink3", label: "Stopped",
+    text: () => "Submission server stopped" },
+  settings_saved: { icon: Target, tone: "bg-[var(--bg3)] text-ink3", label: "Settings",
+    text: () => "Settings saved" },
+};
+function RecentActivity({ log }) {
+  const reduced = useReducedMotion();
+  const items = useMemo(() => (log || [])
+    .filter((e) => EV[e.type] && e.type !== "settings_saved")
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 8), [log]);
+  if (!items.length) {
+    return <EmptyState icon={History} title="Nothing here yet">
+      Activity appears as sheets arrive and reviews are resolved.</EmptyState>;
+  }
+  return (
+    <ul className="space-y-1">
+      <AnimatePresence initial={false}>
+        {items.map((e) => {
+          const ev = EV[e.type];
+          const Icon = ev.icon;
+          return (
+            <motion.li key={e.ts + e.type} layout transition={spring}
+              initial={reduced ? false : { opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="flex items-center gap-3 rounded-lg px-2 py-2">
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center
+                rounded-lg ${ev.tone}`}><Icon size={15} /></span>
+              <div className="min-w-0 flex-1">
+                <b className="block truncate text-[12.5px] text-ink">{ev.label}</b>
+                <span className="block truncate text-[11.5px] text-ink3">{ev.text(e)}</span>
+              </div>
+              <span className="shrink-0 text-[10.5px] font-semibold text-ink3">
+                {fmtTime(e.ts)}</span>
+            </motion.li>
+          );
+        })}
+      </AnimatePresence>
+    </ul>
+  );
+}
+
+/* ------------------------------------------------------------------ next step */
+function NextStep({ state, goto }) {
+  const t = state?.test;
+  if (!t) {
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden rounded-card
+        border border-hair bg-[var(--bg1)] p-5" style={{ boxShadow: "var(--shadow-card)" }}>
+        <div className="pointer-events-none absolute -right-10 -top-10 h-32 w-32
+          rounded-full bg-branddim blur-2xl" />
+        <span className="flex h-11 w-11 items-center justify-center rounded-xl
+          bg-branddim text-brand"><ListChecks size={20} /></span>
+        <h3 className="mt-3 text-[16px] font-bold text-ink">Start a test</h3>
+        <p className="mt-1 text-[13px] leading-relaxed text-ink3">
+          Create an answer sheet, share its link or QR code, then let the app
+          grade the returned photos.</p>
+        <div className="mt-auto flex flex-wrap gap-2 pt-4">
+          <Button icon={Plus} onClick={() => goto("setup")}>Create a test</Button>
+          <Button variant="ghost" onClick={() => goto("help")}>How it works</Button>
+        </div>
+      </div>
+    );
+  }
+  const pending = state?.stats?.pending_review || 0;
+  if (pending > 0) {
+    return <StepCard tone="warn" icon={Inbox} title={`${pending} sheet${pending === 1 ? "" : "s"} await review`}
+      copy="A human decision resolves a flagged sheet — confirm, correct the marks, then export."
+      cta="Open review queue" onCta={() => goto("review")} />;
+  }
+  const results = state?.stats?.exported || 0;
+  if (results === 0) {
+    const ready = state?.server?.running;
+    return <StepCard tone={ready ? "ok" : "brand"} icon={ready ? Send : QrCode}
+      title={ready ? "Share the link & scan" : "Start the submission server"}
+      copy={ready ? `Session live — scan the QR or share ${state.server?.url || "the link"} to collect sheets.`
+        : "Start the local server to hand out the QR code to students."}
+      cta={ready ? "View session" : "Start session"} onCta={() => goto("session")} />;
+  }
+  return <StepCard tone="brand" icon={Sparkles} title="All graded — review the results"
+    copy={`${results} sheet${results === 1 ? "" : "s"} exported. Analyse scores, questions and KR-20.`}
+    cta="Open results" onCta={() => goto("results")} />;
+}
+
+function StepCard({ tone, icon: Icon, title, copy, cta, onCta }) {
+  const meta = {
+    brand: "bg-branddim text-brand", ok: "bg-okdim text-ok",
+    warn: "bg-warndim text-warn", err: "bg-errdim text-err",
+  }[tone];
+  return (
+    <div className="relative flex h-full flex-col overflow-hidden rounded-card
+      border border-hair bg-[var(--bg1)] p-5" style={{ boxShadow: "var(--shadow-card)" }}>
+      <div className="pointer-events-none absolute -right-10 -top-10 h-32 w-32
+        rounded-full bg-branddim blur-2xl" />
+      <div className="flex items-start gap-3">
+        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${meta}`}>
+          <Icon size={20} /></span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[16px] font-bold text-ink">{title}</h3>
+          <p className="mt-1 text-[13px] leading-relaxed text-ink3">{copy}</p>
+        </div>
+      </div>
+      <div className="mt-auto flex justify-end pt-4">
+        <Button icon={ArrowRight} onClick={onCta}>{cta}</Button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ the page */
 export default function Dashboard() {
-  const { state, goto, refresh } = useApp();
-  const { data: tests, error, loading, reload } = useFetch("/api/tests");
-  const toast = useToast();
-  const [busyId, setBusyId] = useState(null);
-  const [del, setDel] = useState(null);
-  const [arch, setArch] = useState(null);
-  const [archPw, setArchPw] = useState("");
-  const [archBusy, setArchBusy] = useState(false);
-  const [archErr, setArchErr] = useState(null);
-  const [edit, setEdit] = useState(null);
-  const [edTitle, setEdTitle] = useState("");
-  const [edKey, setEdKey] = useState("");
-  const [edBusy, setEdBusy] = useState(false);
-  const [edErr, setEdErr] = useState(null);
-  const [impBusy, setImpBusy] = useState(false);
-  const doImport = async (file, pw) => {
-    setImpBusy(true);
-    const fd = new FormData();
-    fd.append("file", file);
-    if (pw) fd.append("password", pw);
-    try {
-      const r = await api("/api/archive/restore", { method: "POST", body: fd });
-      toast(`Restored ${r.test_id} (${r.files} files)`, "ok");
-      await refresh(true); await reload(true);
-    } catch (e) {
-      toast(e.message, "err");
-    }
-    setImpBusy(false);
-  };
-  const pickImport = () => {
-    const inp = document.createElement("input");
-    inp.type = "file";
-    inp.accept = ".optibubble,.zip";
-    inp.onchange = () => {
-      const f = inp.files?.[0];
-      if (!f) return;
-      const pw = prompt("Archive password (leave empty if none):");
-      if (pw === null) return;
-      doImport(f, pw);
-    };
-    inp.click();
-  };
-  useEffect(() => {
-    const openArch = (e) => { setArch(e.detail); setArchPw(""); setArchErr(null); };
-    const openEdit = (e) => {
-      const t = e.detail;
-      api(`/api/tests/${t.test_id}`).then((d) => {
-        setEdit(d.test || t);
-        setEdTitle(d.test?.title || t.title || "");
-        setEdKey(Object.entries(d.test?.answer_key || {})
-          .sort((a, b) => a[0] - b[0]).map(([q, a]) => `${q}:${a}`).join(" "));
-        setEdErr(null);
-      }).catch(() => setEdit(t));
-    };
-    window.addEventListener("ob-archive", openArch);
-    window.addEventListener("ob-edit", openEdit);
-    return () => { window.removeEventListener("ob-archive", openArch);
-                   window.removeEventListener("ob-edit", openEdit); };
-  }, []);
+  const { state, goto } = useApp();
+  const reduced = useReducedMotion();
+  const results = useFetch("/api/results");
+  const analytics = useFetch("/api/analytics");
 
-  const open = async (id) => {
-    setBusyId(id);
-    try {
-      await api(`/api/tests/${id}/open`, { method: "POST" });
-      toast("Test opened — serve, review and results now show it", "ok");
-      await refresh(true); await reload(true); goto("serve");
-    } catch (e) { toast(e.message, "err"); }
-    setBusyId(null);
-  };
-  const doDelete = async () => {
-    try {
-      await api(`/api/tests/${del.test_id}/delete`, { method: "POST" });
-      toast("Test deleted", "ok");
-      setDel(null); await refresh(true); await reload(true);
-    } catch (e) { toast(e.message, "err"); setDel(null); }
-  };
+  // derive real aggregates once per render
+  const { rows, pcts, mean, median, dist, cdf } = useMemo(() => {
+    const rows = results.data || [];
+    const pcts = rows.map((r) => Number(r?.Percent ?? r?.percent)).filter(Number.isFinite);
+    const mean = pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : 0;
+    const sorted = [...pcts].sort((a, b) => a - b);
+    const median = sorted.length ? (sorted.length % 2
+      ? sorted[(sorted.length - 1) / 2]
+      : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2) : 0;
+    const dist = Array.from({ length: 9 }, () => 0);
+    pcts.forEach((s) => { dist[Math.min(8, Math.floor(s / (100 / 9)))] += 1; });
+    // asc CDF (percentile vs score) = real distribution curve
+    const cdf = sorted.map((_, i) => (i + 1));
+    return { rows, pcts, mean, median, dist, cdf };
+  }, [results.data]);
+
+  const s = state?.stats || {};
+  const t = state?.test;
+
+  const kpis = [
+    { key: "graded", label: "Graded sheets", value: rows.length, suffix: "",
+      sub: t ? `${t.num_questions} questions` : "across sessions",
+      icon: FileCheck2, tone: "text-ok", accent: "bg-okdim text-ok",
+      spark: cdf, sparkColor: "var(--ok)", onTap: () => goto("tests") },
+    { key: "mean", label: "Mean score", value: Math.round(mean), suffix: "%",
+      sub: `median ${median.toFixed(1)}%`, icon: Gauge, tone: "text-brand",
+      accent: "bg-branddim text-brand", spark: cdf, sparkColor: "var(--brand)",
+      onTap: () => goto("results") },
+    { key: "review", label: "Awaiting review", value: s.pending_review || 0, suffix: "",
+      sub: s.pending_review ? "flagged to confirm" : "queue clear",
+      icon: ListChecks, tone: "text-warn", accent: "bg-warndim text-warn",
+      spark: cdf, sparkColor: "var(--warn)", onTap: () => goto("review") },
+    { key: "reject", label: "Rejected", value: s.rejected || 0, suffix: "",
+      sub: "auto-rejected", icon: XCircle, tone: "text-ink2",
+      accent: "bg-[var(--bg3)] text-ink2", spark: cdf, sparkColor: "var(--tx3)",
+      onTap: null },
+  ];
+
+  const today = new Date().toLocaleDateString(undefined, {
+    weekday: "long", month: "long", day: "numeric" });
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        <Card className="brackets">
-          <Badge tone="info">local OMR · mobile bridge</Badge>
-          <h1 className="mb-2 mt-3 text-[21px] font-semibold leading-tight
-            tracking-[-0.02em]">
-            Grade a whole stack,{" "}
-            <em className="font-serif italic font-normal">straight from your phone.</em></h1>
-          <p className="max-w-lg text-[13px] leading-relaxed text-ink2">
-            Generate the answer sheet, scan it with any phone browser on your
-            Wi-Fi, and OpenCV grades it here in milliseconds.
-            Ambiguous marks wait in the review queue; everything exports to CSV.</p>
-          <div className="mt-4 grid gap-2.5 sm:grid-cols-3">
-            {[["1", "Create a test", "questions, options, key", "setup"],
-              ["2", "Print & serve", "QR magic link", "serve"],
-              ["3", "Review & export", "crops → CSV", "review"]].map(([n, t, s, p]) => (
-              <button key={n} onClick={() => goto(p)}
-                className="focusable hov group rounded border border-hair bg-base
-                  p-3 text-left">
-                <span className="tnum text-[11px] font-extrabold text-brand">{n}</span>
-                <b className="block text-[12.5px]">{t}</b>
-                <span className="block text-[11px] text-ink3">{s}</span>
-              </button>
-            ))}
-          </div>
-        </Card>
-        <Card title="Active test">
-          {state?.test ? (
-            <>
-              <b className="block truncate text-[14px]">{state.test.title}</b>
-              <p className="mt-0.5 text-[12px] text-ink3">
-                {state.test.subject} · {state.test.num_questions} questions ·
-                ×{state.test.options_per_question} options</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button onClick={() => goto("serve")}>Scan & Serve <ArrowRight size={13}/></Button>
-                <a href="/api/sheet.pdf" target="_blank" rel="noopener"
-                  className="focusable btn-hov inline-flex items-center gap-2 rounded
-                    border border-hair2 bg-fill px-4 py-2 text-[12.5px] font-extrabold">
-                  Sheet PDF</a>
-              </div>
-            </>
-          ) : <EmptyState icon={FileText} title="No active test">
-              Create one, or open a previous test below.
-            </EmptyState>}
-        </Card>
+    <div className="space-y-5">
+      {/* header */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <p className="text-[13px] font-bold text-ink3">{today}</p>
+          <h1 className="text-[26px] font-extrabold tracking-[-0.02em] text-ink">
+            {t ? "Welcome back" : "Dashboard"}</h1>
+          <p className="mt-0.5 text-[13.5px] text-ink2">
+            {t ? <>Active test · <b className="text-ink">{t.title}</b></>
+              : "Set up a test to start grading."}</p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant={t ? "ghost" : "primary"} icon={Plus}
+            onClick={() => goto("setup")}>New test</Button>
+          {t && <Button icon={QrCode} onClick={() => goto("session")}>
+            Scan &amp; serve</Button>}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        {STATS.map(([k, label, tone]) => (
-          <div key={k} className="panel glass px-4 py-3 transition-transform
-            hover:-translate-y-0.5">
-            <AnimatedNum value={state?.stats?.[k] || 0}
-              className={`block text-[22px] font-extrabold ${tone}`}/>
-            <span className="text-[9.5px] font-extrabold uppercase tracking-[.13em]
-              text-ink3">{label}</span>
-          </div>
+      {/* motion choreography */}
+      <motion.div className="space-y-5" initial={reduced ? false : "hidden"}
+        animate="show"
+        variants={{ show: { transition: { staggerChildren: 0.05 } } }}>
+
+        {/* KPI grid */}
+        <motion.div className="grid grid-cols-2 gap-4 lg:grid-cols-4"
+          variants={{ hidden: { opacity: 0 }, show: { opacity: 1,
+            transition: { staggerChildren: 0.06 } } }}>
+          {kpis.map((k) => (
+            <motion.div key={k.key} className="h-full"
+              variants={{ hidden: { opacity: 0, y: 12 },
+                show: { opacity: 1, y: 0, transition: softSpring } }}>
+              <Kpi {...k} />
+            </motion.div>
+          ))}
+        </motion.div>
+
+        {/* charts row */}
+        <motion.div className="grid grid-cols-1 gap-4 lg:grid-cols-3"
+          variants={{ hidden: { opacity: 0 }, show: { opacity: 1,
+            transition: { staggerChildren: 0.06 } } }}>
+          <motion.div variants={{ hidden: { opacity: 0, y: 14 },
+            show: { opacity: 1, y: 0, transition: softSpring } }}
+            className="lg:col-span-2">
+            <Card title="Score distribution" className="h-full"
+              sub={`${rows.length} graded sheet${rows.length === 1 ? "" : "s"}`}>
+              {results.loading && !results.data
+                ? <div className="space-y-2">{[0, 1, 2].map((i) =>
+                    <Skeleton key={i} className="h-5 w-full" /> )}</div>
+                : results.error
+                  ? <ErrorState error={results.error} onRetry={() => results.reload()} />
+                  : rows.length
+                    ? <ScoreHistogram scores={pcts} />
+                    : <EmptyState icon={TrendingUp} title="No scores yet">
+                        Grade a sheet and the score distribution appears here.</EmptyState>}
+            </Card>
+          </motion.div>
+
+          <motion.div variants={{ hidden: { opacity: 0, y: 14 },
+            show: { opacity: 1, y: 0, transition: softSpring } }} className="h-full">
+            <Card title="Analytics" className="h-full"
+              sub="reliability & question quality">
+              <AnalyticsCard data={analytics.data} loading={analytics.loading}
+                error={analytics.error} reload={analytics.reload} />
+            </Card>
+          </motion.div>
+        </motion.div>
+
+        {/* lower row */}
+        <motion.div className="grid grid-cols-1 gap-4 lg:grid-cols-3"
+          variants={{ hidden: { opacity: 0 }, show: { opacity: 1,
+            transition: { staggerChildren: 0.06 } } }}>
+          <motion.div variants={{ hidden: { opacity: 0, y: 14 },
+            show: { opacity: 1, y: 0, transition: softSpring } }}
+            className="lg:col-span-2">
+            <Card title="Recent activity" className="h-full" sub="the last 8 events">
+              <RecentActivity log={state?.log} />
+            </Card>
+          </motion.div>
+          <motion.div variants={{ hidden: { opacity: 0, y: 14 },
+            show: { opacity: 1, y: 0, transition: softSpring } }}>
+            <NextStep state={state} goto={goto} />
+          </motion.div>
+        </motion.div>
+      </motion.div>
+
+      {/* how it flows */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {[
+          ["Create", ListChecks, "Design the answer sheet with an answer key.", "setup"],
+          ["Collect", QrCode, "Share the link or QR code to receive photos.", "session"],
+          ["Grade", Zap, "Auto-grade the marks; review only what it flags.", "review"],
+        ].map(([label, Icon, copy, page], i) => (
+          <button key={label} onClick={() => goto(page)}
+            className="group flex items-center gap-3 rounded-card border border-hair
+              bg-[var(--bg1)] p-4 text-left transition-shadow focusable hov"
+            style={{ boxShadow: "var(--shadow-card)" }}>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg
+              bg-branddim text-brand"><Icon size={17} /></span>
+            <span className="min-w-0 flex-1">
+              <b className="block text-[13.5px] text-ink">{label}</b>
+              <span className="block text-[12px] leading-snug text-ink3">{copy}</span>
+            </span>
+            <ArrowRight size={15} className="shrink-0 text-ink3 transition-transform
+              group-hover:translate-x-0.5 group-hover:text-brand" />
+          </button>
         ))}
       </div>
-
-      <Card title="Your tests" right={
-        <>
-          <Badge tone="info">{tests?.length ?? "…"}</Badge>
-          <Button variant="ghost" icon={Upload} loading={impBusy} onClick={pickImport}>Import</Button>
-          <Button variant="ghost" icon={Plus} onClick={() => goto("setup")}>New test</Button>
-        </>}>
-        <p className="-mt-2 mb-3 text-[12px] leading-relaxed text-ink3">
-          Opening a test switches Scan & Serve, Review and Results to its own
-          data — every test keeps its own sheets, queue and CSV.</p>
-        {loading && !tests ? (
-          <div className="space-y-2">{[0, 1, 2].map((i) =>
-            <Skeleton key={i} className="h-10 w-full"/>)}</div>
-        ) : error ? <ErrorState error={error} onRetry={() => reload()}/>
-        : !tests?.length ? (
-          <EmptyState icon={FileText} title="No tests yet">
-            Create your first answer sheet — it takes under a minute.
-          </EmptyState>
-        ) : (
-          <ul className="space-y-1.5">
-            <AnimatePresence initial={false}>
-              {tests.map((t) => (
-                <motion.li key={t.test_id} layout transition={spring}
-                  initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.98 }}
-                  className="flex min-w-0 items-center gap-3 rounded border border-hair
-                    bg-base px-3 py-2">
-                  <FileText size={15} className="shrink-0 text-ink3"/>
-                  <div className="min-w-0 flex-1">
-                    <b className="block truncate text-[12.5px]">{t.title}</b>
-                    <span className="tnum block font-mono text-[10px] text-ink3">
-                      {t.test_id} · {t.num_questions}×{t.options_per_question} ·
-                      graded {t.graded || 0}</span>
-                  </div>
-                  {state?.test?.test_id === t.test_id && <Badge tone="info">active</Badge>}
-                  <Button variant="ghost" loading={busyId === t.test_id}
-                    onClick={() => open(t.test_id)}>Open</Button>
-                  <IconButton icon={ArchiveRestore} label="Archive (encrypted)"
-                    onClick={() => window.dispatchEvent(
-                      new CustomEvent("ob-archive", { detail: t }))}/>
-                  <IconButton icon={Pencil} label="Edit"
-                    onClick={() => window.dispatchEvent(
-                      new CustomEvent("ob-edit", { detail: t }))}/>
-                  <IconButton icon={Trash2} label="Delete" tone="danger"
-                    onClick={() => setDel(t)}/>
-                </motion.li>
-              ))}
-            </AnimatePresence>
-          </ul>
-        )}
-      </Card>
-
-      <AnimatePresence>
-        {del && (
-          <Modal title={`Delete “${del.title}”?`} onClose={() => setDel(null)}>
-            <p className="text-[12.5px] leading-relaxed text-ink2">
-              This permanently removes its answer sheet, every received photo,
-              the review queue and <b>all graded results</b>. It cannot be undone.</p>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setDel(null)}>Keep it</Button>
-              <Button variant="danger" icon={Trash2} onClick={doDelete}>
-                Delete everything</Button>
-            </div>
-          </Modal>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {arch && (
-          <Modal title={`Archive “${arch.title}”`} onClose={() => setArch(null)}>
-            <p className="mb-3 text-[12.5px] leading-relaxed text-ink2">
-              Packages the whole test — sheet, key, photos, crops and results —
-              into one <code>.optibubble</code> file — optionally encrypted (AES-256).</p>
-            <Field label="Password (optional)"
-              hint="Leave empty for a plain, unencrypted archive."
-              error={archErr}>
-              <Input value={archPw} type="password" placeholder="archive password"
-                onChange={(e) => setArchPw(e.target.value)}/>
-            </Field>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setArch(null)}>Cancel</Button>
-              <Button icon={ArchiveRestore} loading={archBusy}
-                onClick={async () => {
-                  if (archPw && archPw.length < 4) {
-                    setArchErr("Password needs 4+ characters (or leave it empty)."); return; }
-                  setArchBusy(true); setArchErr(null);
-                  try {
-                    const r = await fetch(`/api/tests/${arch.test_id}/archive`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ password: archPw }) });
-                    if (!r.ok) throw await r.json();
-                    const blob = await r.blob();
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = arch.test_id + ".optibubble";
-                    a.click(); URL.revokeObjectURL(a.href);
-                    setArch(null);
-                    toast(archPw ? "Encrypted archive downloaded"
-                                 : "Archive downloaded (no password)", "ok");
-                  } catch (e) {
-                    setArchErr((e && e.error) || "failed");
-                  } finally {
-                    setArchBusy(false);
-                  }
-                }}>Download archive</Button>
-            </div>
-          </Modal>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {edit && (
-          <Modal title="Edit test" onClose={() => setEdit(null)}>
-            <p className="mb-3 text-[12px] leading-relaxed text-ink3">
-              Structure (questions, options, paper) is fixed once printed —
-              everything else can change.</p>
-            <Field label="Title">
-              <Input value={edTitle} maxLength={80}
-                onChange={(e) => setEdTitle(e.target.value)}/></Field>
-            <Field label="Answer key"
-              hint="Replace the whole key · leave empty to keep the current one.">
-              <Input value={edKey} className="font-mono text-[11.5px]"
-                placeholder="1:A 2:C … or ABCD…" onChange={(e) => setEdKey(e.target.value)}/></Field>
-            {edErr && <p className="mb-2 text-[11.5px] font-semibold text-err">• {edErr}</p>}
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
-              <Button icon={Pencil} loading={edBusy}
-                onClick={async () => {
-                  setEdBusy(true); setEdErr(null);
-                  try {
-                    const body = { title: edTitle };
-                    const kt = edKey.trim();
-                    if (kt) {
-                      const entries = {};
-                      (kt.toUpperCase().match(/(\d{1,3})\s*[:.\-]\s*([A-E])/g) || [])
-                        .forEach((m) => { const g = m.match(/(\d{1,3})\s*[:.\-]\s*([A-E])/);
-                                           entries[+g[1]] = g[2]; });
-                      if (!Object.keys(entries).length)
-                        [...kt.toUpperCase().replace(/[^A-E]/g, "")].forEach(
-                          (a, i) => { entries[i + 1] = a; });
-                      body.answer_key = entries;
-                    }
-                    const r = await api(`/api/tests/${edit.test_id}/edit`, {
-                      method: "POST", body: JSON.stringify(body) });
-                    if (r.ok) {
-                      setEdit(null); toast("Test updated — sheet PDF refreshed", "ok");
-                      await refresh(true); await reload(true);
-                    }
-                  } catch (e) { setEdErr(e.message); }
-                  setEdBusy(false);
-                }}>Save changes</Button>
-            </div>
-          </Modal>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

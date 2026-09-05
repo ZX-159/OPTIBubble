@@ -31,8 +31,9 @@ From a fresh clone to published installers for **Windows, macOS and Linux
 | Optional | **Rust 1.77+** via [rustup](https://rustup.rs) | native Tauri builds only |
 | Linux native builds | WebKit dev packages | see [§4.3](#43--linux-prerequisites-for-tauri) |
 
-No Node.js toolchain is needed anywhere — the UI is plain HTML/CSS/JS served
-by the Python engine.
+Node 18+ is needed **once, to build the React SPA** (the desktop app and phone
+scanner are a single Vite-built SPA served by the engine). A packaged installer
+ships the built SPA, so end users never need Node.
 
 ## 2 · Development setup (any OS)
 
@@ -47,7 +48,7 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-python selftest.py                 # expect: 75/75 checks passed · ALL GREEN
+python selftest.py                 # end-to-end suite — 85 checks, all green
 python main.py                     # app opens at http://127.0.0.1:5000
 ```
 
@@ -99,10 +100,12 @@ cargo tauri dev                            # native window (spawns the engine)
 cargo tauri build                          # installers → src-tauri/target/release/bundle/
 ```
 
-The shell launches `python3 main.py --no-browser`, so the target machine still
-needs Python + `pip install -r requirements.txt`. For a fully self-contained
-binary, freeze the engine with PyInstaller (`pyinstaller --onefile main.py`)
-and point `src-tauri/src/main.rs` at the frozen binary name.
+The shell launches `python3 main.py --no-browser` and reads the engine's real
+port from a `--port-file`, so it opens the window at whatever port the engine
+actually bound (it falls back automatically if 5000 is occupied). Building
+from source on a dev machine needs Python + `pip install -r requirements.txt`;
+a release installer freezes the engine with PyInstaller (§4.6) so end users
+need nothing installed.
 
 ### 4.3 · Linux prerequisites for Tauri
 
@@ -261,43 +264,57 @@ CI and releases:
 **Cutting a release — the exact steps:**
 
 ```bash
-# 1 · bump the version in THREE files (keep them in sync):
-#      optibubble/__init__.py        → __version__ = "1.1.0"
-#      src-tauri/tauri.conf.json     → "version": "1.1.0"
-#      src-tauri/Cargo.toml          → version = "1.1.0"
-#    then refresh the lockfile:
-cd src-tauri && cargo update -p optibubble && cd ..
+# 0 · (optional) run the self-test locally so you only ever tag a green build
+python selftest.py
 
-# 2 · commit and tag
+# 1 · bump the version everywhere from ONE source of truth:
+python tools/sync_version.py 2.0.0
+
+# 2 · stage, commit and tag (one clean release commit, then a tag on it)
 git add -A
-git commit -m "release: v1.1.0"
-git tag v1.1.0
+git commit -m "release: v2.0.0 — three-pass OMR anchors, stroke auto-heal, scanner torch/switch, guide"
+
+git tag v2.0.0
+
+# 3 · push the branch AND the tag — the tag is what triggers the release build
 git push origin main --tags
 ```
 
 3. Watch the build at **Actions → Build & Release** (green ✓ per platform).
-4. Open **Releases** → the draft **“OPTIBubble v1.1.0”** now has every
+   The `rust-check` job now freezes the Python engine *before* `cargo check`,
+   because the Tauri build script resolves the `engine/*` resource glob at
+   build time — missing it was the previous build-killer. (`src-tauri/engine/.gitkeep`
+   is committed so the glob also resolves on a fresh clone / local `cargo build`.)
+4. Open **Releases** → the draft **“OPTIBubble v2.0.0”** now has every
    installer attached. Edit the notes if you like, then press **Publish**.
 
 > The release is created as a *draft* on purpose — nothing is public until you
 > publish it. No secrets or signing keys are required for unsigned builds.
 > To sign later: Windows → `TAURI_SIGNING_PRIVATE_KEY` secrets (Tauri docs);
 > macOS notarization → `APPLE_CERTIFICATE`/`APPLE_ID` secrets; Flathub signs
-> Flatpaks for you.
+> Flatpaks for you. See [README → Download & install](#) for the checksum
+> verification users should do.
 
-## 6 · The complete `main.yml` (verbatim)
+## 6 · The release workflow (`main.yml`)
 
-This is the exact file at `.github/workflows/main.yml` in the repo:
-
+# --- workflow (kept in sync with .github/workflows/main.yml) ---
 ```yaml
 # ============================================================================
 # OPTIBubble — main.yml
 # One workflow: CI on every push/PR, release builds on tags (v*) or manual run.
 #
-#   push / pull_request  → job "selftest" only (fast, ~1 min)
-#   tag v* / dispatch    → selftest + installers for every platform:
-#                         Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
-#                         Linux AppImage + deb + RPM  ·  Flatpak bundle
+#   push / pull_request   → job "selftest" + "rust-check" (fast, ~2 min)
+#   tag v* / dispatch     → selftest + installers for every platform:
+#                           Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
+#                           Linux AppImage + deb + RPM · Flatpak bundle
+#
+# IMPORTANT — why rust-check freezes the engine:
+#   Tauri's build script resolves the `engine/*` resource glob from tauri.conf
+#   DURING `cargo check`. If `src-tauri/engine/` is empty the build fails with
+#   "glob pattern engine/* path not found or didn't match any files". CI never
+#   produced those files, so rust-check failed. We freeze the engine first here
+#   and also commit a `.gitkeep` in `src-tauri/engine/` so the glob resolves
+#   even on a fresh clone (and for local `cargo build`).
 #
 # No secrets required. Release is created as a DRAFT — review and publish at
 # github.com/<you>/OPTIBubble/releases (see setup.md → "Cutting a release").
@@ -314,10 +331,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ------------------------------------------------------------------- CI ---
   selftest:
-    name: Self-test (75 checks)
+    name: Self-test (end-to-end)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -330,9 +351,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Build the React SPA
-        run: cd frontend && npm install --no-audit --no-fund && npm run build
+        run: cd frontend && npm ci --no-audit --no-fund && npm run build
 
       - name: Install engine dependencies
         run: pip install -r requirements.txt
@@ -346,12 +369,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
       - name: Linux system dependencies (WebKit)
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file pkg-config
+
+      # The `engine/*` bundle glob must resolve for the Tauri build script.
+      - name: Freeze the Python engine (single self-contained binary)
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller optibubble.spec --distpath src-tauri/engine \
+            --workpath build-engine --noconfirm
+
       - name: cargo check (src-tauri)
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
@@ -384,6 +426,10 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Linux system dependencies (WebKit)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -394,7 +440,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The React SPA must be built BEFORE freezing — optibubble/web/dist is a
+      # build artifact, not committed, so without this step every installer
+      # ships only the legacy app.html/scan.html and not the React UI.
+      - name: Build the React SPA
+        run: cd frontend && npm ci --no-audit --no-fund && npm run build
+
+      # The `engine/*` bundle glob needs the frozen binary in place before the
+      # Tauri build script resolves it (same reason as rust-check).
       - name: Freeze the Python engine (single self-contained binary)
         run: |
           pip install -r requirements.txt pyinstaller
@@ -407,7 +468,7 @@ jobs:
           projectPath: .
           tagName: v__VERSION__
           releaseName: "OPTIBubble v__VERSION__"
-          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Note: the Python engine (pip install -r requirements.txt) is still required on the target machine — see setup.md."
+          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Each installer is fully self-contained (Python engine frozen with PyInstaller) — end users need nothing installed. Verify downloads against the SHA256SUMS file described in the README."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

@@ -195,9 +195,28 @@ class Storage:
                          sheet_id: str) -> Path:
         d = self.test_root(test) / "sheets"
         d.mkdir(parents=True, exist_ok=True)
-        path = d / f"{sheet_id}.jpg"
+        # Use the real container (JPEG/PNG/WebP…) rather than assuming `.jpg`.
+        # Phones send JPEG, but a PNG/HEIC upload would otherwise be stored
+        # under a misleading extension that breaks thumbnailing/auditing.
+        ext = _sniff_image_ext(data)
+        path = d / f"{sheet_id}.{ext}"
         path.write_bytes(data)
         return path
+
+
+def _sniff_image_ext(data: bytes) -> str:
+    """Return the image container extension from the leading magic bytes."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    if data[:2] == b"BM":
+        return "bmp"
+    return "jpg"   # default back to the historical behaviour
 
 
 def _result_to_json(r: GradeResult) -> dict:

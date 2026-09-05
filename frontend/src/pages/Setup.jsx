@@ -132,7 +132,7 @@ export default function Setup() {
               onChange={(e) => set("instructions")(e.target.value)}/></Field>
           <Field label={`Header text size — ${Math.round(f.header_font_scale * 100)}%`}>
             <input type="range" min="0.8" max="1.4" step="0.05"
-              value={f.header_font_scale} className="w-full accent-[#FF5A2D]"
+              value={f.header_font_scale} className="w-full accent-[var(--brand)]"
               onChange={(e) => set("header_font_scale")(+e.target.value)}/></Field>
           <Field label="Wordmark side" hint="Logo prints in brand blue #2e5a99.">
             <Segmented value={f.logo_position} onChange={set("logo_position")}

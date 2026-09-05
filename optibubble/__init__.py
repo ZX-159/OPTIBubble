@@ -9,6 +9,6 @@ All processing happens locally. No cloud. No accounts. No data leaves your
 network.
 """
 
-__version__ = "1.9.1"
+__version__ = "2.0.0"
 APP_NAME = "OPTIBubble"
 APP_TAGLINE = "Scan. Grade. Done."

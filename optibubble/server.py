@@ -29,6 +29,7 @@ Assets: /fonts/*, /assets/*
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -44,7 +45,10 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 def _web_path(sub: str, name: str) -> Path:
     base = (WEB_DIR / sub).resolve()
     p = (base / name).resolve()
-    if not str(p).startswith(str(base)):
+    # path-is-contained check (not a fragile `startswith` sibling-prefix test)
+    try:
+        p.relative_to(base)
+    except ValueError:
         abort(404)
     return p
 
@@ -71,7 +75,9 @@ def create_app(hub: Hub) -> Flask:
     def assets(name: str):
         base_assets = (WEB_DIR / "assets").resolve()
         p = (base_assets / name).resolve()
-        if not str(p).startswith(str(base_assets)):   # path traversal guard
+        try:                                            # path traversal guard
+            p.relative_to(base_assets)
+        except ValueError:
             abort(404)
         if not p.exists():                             # app.css / app.js live in web root
             p = _web_path("", name)
@@ -169,7 +175,10 @@ def create_app(hub: Hub) -> Flask:
         if p.exists():
             html = p.read_text(encoding="utf-8")
             marker = f"<script>window.__OB_ROUTE__={route!r};</script>"
-            html = html.replace("<head>", f"<head>{marker}", 1)
+            # tolerate `<head>` with attributes; a literal .replace("<head>")
+            # silently no-ops if the template ever gains attributes, which
+            # would leave the SPA unable to tell its route apart.
+            html = re.sub(r"<head\b[^>]*>", lambda m: m.group(0) + marker, html, count=1)
             return Response(html, mimetype="text/html")
         # No React build available → serve the matching LEGACY page.  A scan
         # link must NEVER fall back to the desktop dashboard.
@@ -187,7 +196,11 @@ def create_app(hub: Hub) -> Flask:
     @app.route("/app/<path:name>")
     def spa_assets(name: str):
         p = (_DIST / name).resolve()
-        if not str(p).startswith(str(_DIST.resolve())) or not p.exists():
+        try:
+            p.relative_to(_DIST.resolve())
+        except ValueError:
+            abort(404)
+        if not p.exists():
             abort(404)
         mime = ("text/javascript" if name.endswith((".js", ".mjs"))
                 else "text/css" if name.endswith(".css") else None)
@@ -539,17 +552,22 @@ def create_app(hub: Hub) -> Flask:
         for q in qs:
             p = sum(1.0 for s in sheets if s.get(str(q))) / n
             sum_pq += p * (1 - p)
-            # point-biserial: item score vs total score
-            m1 = sum(t for t, s in zip(totals, sheets) if s.get(str(q))) / \
-                 max(1, sum(1 for s in sheets if s.get(str(q))))
-            m0 = sum(t for t, s in zip(totals, sheets) if not s.get(str(q))) / \
-                 max(1, sum(1 for s in sheets if not s.get(str(q))))
-            rpb = ((m1 - m0) * _math.sqrt(p * (1 - p)) / _math.sqrt(var)
-                    if var > 0 else 0.0)
+            # point-biserial: item score vs total score. Guard against a
+            # singleton group (everyone got it right or nobody did) — the
+            # mean of an empty set is undefined, not a clamped-to-1 divider.
+            hit = [t for t, s in zip(totals, sheets) if s.get(str(q))]
+            miss = [t for t, s in zip(totals, sheets) if not s.get(str(q))]
+            m1 = sum(hit) / len(hit) if hit else None
+            m0 = sum(miss) / len(miss) if miss else None
+            if m1 is not None and m0 is not None and var > 0:
+                rpb = (m1 - m0) * _math.sqrt(p * (1 - p)) / _math.sqrt(var)
+            else:
+                rpb = 0.0
             qstat.append({"q": q, "p_correct": round(p, 3),
                           "error_rate": round(1 - p, 3),
                           "discrimination": round(rpb, 3),
-                          "points": hub.test.weight_for(q)})
+                          "points": hub.test.weight_for(q),
+                          "n_correct": len(hit), "n_wrong": len(miss)})
         k = len(qs)
         kr20 = (k / (k - 1)) * (1 - sum_pq / var) if k > 1 and var > 0 else None
         sorted_t = sorted(totals)
@@ -604,7 +622,11 @@ def create_app(hub: Hub) -> Flask:
             abort(404)
         base = (hub.storage.test_root(hub.test) / "review" / "crops").resolve()
         p = (base / sheet_id / f"{name}.png").resolve()
-        if not str(p).startswith(str(base)) or not p.exists():
+        try:
+            p.relative_to(base)
+        except ValueError:
+            abort(404)
+        if not p.exists():
             abort(404)
         return send_file(p, mimetype="image/png")
 
@@ -612,7 +634,9 @@ def create_app(hub: Hub) -> Flask:
     def crop():
         p = request.args.get("p", "")
         path = Path(p).resolve()
-        if not str(path).startswith(str(hub.data_dir.resolve())):
+        try:                                            # must be inside data dir
+            path.relative_to(hub.data_dir.resolve())
+        except ValueError:
             abort(403)
         if not path.exists():
             abort(404)

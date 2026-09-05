@@ -1,6 +1,6 @@
 [package]
 name = "optibubble"
-version = "1.9.1"
+version = "2.0.0"
 description = "OPTIBubble — local OMR & mobile-bridge grading system"
 authors = ["OPTIBubble contributors"]
 license = "GPL-3.0"
@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 
 [profile.release]
 codegen-units = 1

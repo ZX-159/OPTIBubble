@@ -1,6 +1,6 @@
-/* Regmark v2 UI kit — every component carries the full state matrix:
+/* Ledger UI kit — every component carries the full state matrix:
    idle · hover (pointer) · focus-visible (keyboard) · active · disabled ·
-   loading · error · success. Motion springs throughout. */
+   loading · success · error. Motion springs throughout. */
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, Check, Info, Loader2, X } from "lucide-react";
@@ -10,10 +10,10 @@ export const softSpring = { type: "spring", stiffness: 260, damping: 30 };
 
 /* ------------------------------------------------------------------ Button */
 const BTN = {
-  primary: "bg-brand text-white",
-  ghost: "bg-fill text-ink border border-hair2",
+  primary: "bg-brand text-brandink",
+  ghost: "bg-[var(--bg3)] text-ink border border-hair2",
   danger: "bg-err text-white",
-  ok: "bg-ok text-[#06130C]",
+  ok: "bg-ok text-[#0B281B]",
 };
 export function Button({ variant = "primary", loading, success, icon: Icon,
                          children, className = "", ...rest }) {
@@ -30,7 +30,7 @@ export function Button({ variant = "primary", loading, success, icon: Icon,
       disabled={rest.disabled || loading}
       aria-busy={loading || undefined}
       className={`focusable btn-hov inline-flex items-center justify-center gap-2 rounded
-        px-4 py-2 text-[12.5px] font-extrabold tracking-wide
+        px-4 py-2 text-[13px] font-extrabold tracking-wide
         ${BTN[variant]} ${className}`}>
       {loading ? <Loader2 size={14} className="animate-spin" />
         : done ? <Check size={14} />
@@ -58,12 +58,12 @@ export function Card({ title, sub, right, children, className = "", ...rest }) {
       {...rest}>
       {(title || right) && (
         <div className="mb-3 flex min-w-0 items-center gap-3">
-          {title && <h3 className="regmark min-w-0 truncate font-mono text-[10px]
-            font-medium uppercase tracking-[.2em] text-ink3">{title}</h3>}
+          {title && <h3 className="min-w-0 truncate text-[13.5px] font-extrabold
+            tracking-[-0.005em] text-ink">{title}</h3>}
           <div className="ml-auto flex items-center gap-2">{right}</div>
         </div>
       )}
-      {sub && <p className="-mt-2 mb-3 text-[12px] leading-relaxed text-ink3">{sub}</p>}
+      {sub && <p className="-mt-2 mb-3 text-[12.5px] leading-relaxed text-ink3">{sub}</p>}
       {children}
     </motion.section>
   );
@@ -73,17 +73,16 @@ export function Card({ title, sub, right, children, className = "", ...rest }) {
 export function Field({ label, hint, error, children }) {
   return (
     <label className="mb-3.5 block min-w-0">
-      <span className="mb-1.5 block text-[10px] font-extrabold uppercase
-        tracking-[.14em] text-ink2">{label}</span>
+      <span className="mb-1.5 block text-[12px] font-bold text-ink2">{label}</span>
       {children}
       {error
-        ? <span className="mt-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-err">
+        ? <span className="mt-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-err">
             <AlertTriangle size={12} />{error}</span>
-        : hint && <span className="mt-1.5 block text-[11px] leading-snug text-ink3">{hint}</span>}
+        : hint && <span className="mt-1.5 block text-[12px] leading-snug text-ink3">{hint}</span>}
     </label>
   );
 }
-const inputCls = `focusable w-full rounded bg-fill px-3 py-2 text-[12.5px] text-ink
+const inputCls = `focusable w-full rounded-lg bg-[var(--bg3)] px-3 py-2.5 text-[13.5px] text-ink
   placeholder:text-ink3 border border-transparent focus-visible:border-brand`;
 export const Input = (p) => <input {...p} className={`${inputCls} ${p.className || ""}`} />;
 export const Select = (p) => (
@@ -93,17 +92,17 @@ export const Textarea = (p) => <textarea {...p} className={`${inputCls} resize-y
 
 export function Segmented({ options, value, onChange, className = "" }) {
   return (
-    <div role="radiogroup" className={`inline-flex max-w-full gap-0.5 rounded bg-fill p-0.5 ${className}`}>
+    <div role="radiogroup" className={`inline-flex max-w-full gap-0.5 rounded-lg bg-[var(--bg3)] p-0.5 ${className}`}>
       {options.map((o) => {
         const active = o.value === value;
         return (
           <button key={String(o.value)} role="radio" aria-checked={active} type="button"
             onClick={() => onChange(o.value)}
             className={`focusable relative min-w-0 flex-1 overflow-hidden
-              text-ellipsis whitespace-nowrap rounded px-3 py-1.5 text-[11.5px]
-              font-semibold ${active ? "text-white" : "text-ink3 hov"}`}>
+              text-ellipsis whitespace-nowrap rounded px-3 py-2 text-[12.5px]
+              font-bold ${active ? "text-brandink" : "text-ink3 hov"}`}>
             {active && <motion.span layoutId={`seg-${options.map(x=>x.value).join()}`}
-              className="absolute inset-0 rounded-[3px] bg-brand"
+              className="absolute inset-0 rounded-[6px] bg-brand"
               transition={spring} />}
             <span className="relative z-10 block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{o.label}</span>
           </button>
@@ -118,7 +117,7 @@ export function Switch({ checked, onChange, label }) {
     <button role="switch" aria-checked={checked} aria-label={label} type="button"
       onClick={() => onChange(!checked)}
       className={`focusable relative h-5 w-9 shrink-0 rounded-full transition-colors
-        ${checked ? "bg-brand" : "bg-fill border border-hair2"}`}>
+        ${checked ? "bg-brand" : "bg-[var(--bg3)] border border-hair2"}`}>
       <motion.span layout transition={spring}
         className={`absolute top-[3px] h-3.5 w-3.5 rounded-full
           ${checked ? "right-[3px] bg-brandink" : "left-[3px] bg-ink3"}`} />
@@ -128,11 +127,11 @@ export function Switch({ checked, onChange, label }) {
 
 /* ------------------------------------------------------------------ Badges */
 const TONES = { ok: "bg-okdim text-ok", warn: "bg-warndim text-warn",
-                err: "bg-errdim text-err", info: "bg-branddim text-brandhi",
-                mute: "bg-fill text-ink3" };
+                err: "bg-errdim text-err", info: "bg-branddim text-brand",
+                mute: "bg-[var(--bg3)] text-ink3" };
 export const Badge = ({ tone = "mute", children, className = "" }) => (
-  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
-    font-mono text-[10px] font-medium uppercase tracking-[.14em] ${TONES[tone]}
+  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1
+    text-[11px] font-bold ${TONES[tone]}
     ${className}`}>
     {children}</span>
 );
@@ -146,8 +145,8 @@ export function EmptyState({ icon: Icon, title, children }) {
   return (
     <div className="flex flex-col items-center gap-1.5 px-4 py-10 text-center">
       {Icon && <Icon size={30} className="text-ink3" />}
-      <b className="text-[13px] text-ink2">{title}</b>
-      <div className="max-w-sm text-[12px] leading-relaxed text-ink3">{children}</div>
+      <b className="text-[14px] text-ink2">{title}</b>
+      <div className="max-w-sm text-[12.5px] leading-relaxed text-ink3">{children}</div>
     </div>
   );
 }
@@ -155,8 +154,8 @@ export function ErrorState({ error, onRetry, retrying }) {
   return (
     <div role="alert" className="flex flex-col items-center gap-2 px-4 py-8 text-center">
       <AlertTriangle size={26} className="text-err" />
-      <b className="text-[13px] text-err">Something went wrong</b>
-      <p className="max-w-sm text-[12px] text-ink3">{String(error || "")}</p>
+      <b className="text-[14px] text-err">Something went wrong</b>
+      <p className="max-w-sm text-[12.5px] text-ink3">{String(error || "")}</p>
       {onRetry && <Button variant="ghost" loading={retrying} onClick={onRetry}>Try again</Button>}
     </div>
   );
@@ -173,16 +172,16 @@ export function Modal({ title, onClose, children, wide }) {
   }, [onClose]);
   return (
     <motion.div className="fixed inset-0 z-[200] flex items-center justify-center p-6"
-      style={{ background: "rgba(5,6,9,.72)", backdropFilter: "blur(3px)" }}
+      style={{ background: "rgba(20,25,33,.55)", backdropFilter: "blur(4px)" }}
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <motion.div role="dialog" aria-modal="true" aria-label={title}
-        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97 }} transition={spring}
-        className={`panel grain max-h-[86vh] w-full overflow-y-auto p-5 shadow-pop ${wide ? "max-w-[680px]" : "max-w-[520px]"}`}>
+        className={`panel grain max-h-[86vh] w-full overflow-y-auto p-6 shadow-pop ${wide ? "max-w-[720px]" : "max-w-[540px]"}`}>
         <div className="mb-3 flex items-center gap-3">
-          <h3 className="min-w-0 flex-1 truncate text-[13px] font-extrabold tracking-wide">{title}</h3>
+          <h3 className="min-w-0 flex-1 truncate text-[15px] font-extrabold text-ink">{title}</h3>
           <IconButton icon={X} label="Close" onClick={onClose} />
         </div>
         {children}
@@ -210,13 +209,14 @@ export function ToastHost({ children }) {
             <motion.div key={t.id}
               initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 24 }} transition={softSpring}
-              className="pointer-events-auto flex max-w-sm items-start gap-2 rounded border-l-2
-                bg-raised px-3.5 py-2.5 text-[12px] font-bold shadow-pop
+              className="pointer-events-auto flex max-w-sm items-start gap-2 rounded
+                border-l-2 border bg-[var(--bg1)] px-3.5 py-2.5 text-[12.5px]
+                font-bold shadow-pop
                 ${t.tone === 'ok' ? 'border-ok' : t.tone === 'err' ? 'border-err' : 'border-brand'}"
               role="status">
               {t.tone === "ok" ? <Check size={14} className="mt-0.5 shrink-0 text-ok"/>
                 : t.tone === "err" ? <AlertTriangle size={14} className="mt-0.5 shrink-0 text-err"/>
-                : <Info size={14} className="mt-0.5 shrink-0 text-brandhi"/>}
+                : <Info size={14} className="mt-0.5 shrink-0 text-brand"/>}
               <span>{t.msg}</span>
             </motion.div>
           ))}
@@ -265,7 +265,7 @@ export function Steps({ steps }) {
           </span>
           <span className="min-w-0">
             <b className="font-bold">{s.label}</b>
-            {s.detail && <span className="block text-[11px] text-ink3">{s.detail}</span>}
+            {s.detail && <span className="block text-[11.5px] text-ink3">{s.detail}</span>}
           </span>
         </li>
       ))}
@@ -275,7 +275,7 @@ export function Steps({ steps }) {
 
 /* ---------------------------------------------------------------- ConfBar */
 export const ConfBar = ({ v }) => (
-  <div className="h-[3px] w-16 overflow-hidden rounded bg-fill">
+  <div className="h-[4px] w-16 overflow-hidden rounded bg-[var(--bg3)]">
     <motion.div className="h-full bg-brand" initial={{ width: 0 }}
       animate={{ width: `${Math.round(v * 100)}%` }} transition={softSpring} />
   </div>

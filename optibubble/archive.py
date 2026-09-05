@@ -79,7 +79,10 @@ def restore_archive(data: bytes, password: str,
         if data[:2] != b"PK":
             raise ValueError("Not an OPTIBubble archive (or zip).")
         raw = data
-    zf = zipfile.ZipFile(io.BytesIO(raw))
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError) as e:
+        raise ValueError(f"Damaged archive — not a readable zip ({e}).")
     names = zf.namelist()
     if not names:
         raise ValueError("Archive is empty.")
@@ -91,11 +94,16 @@ def restore_archive(data: bytes, password: str,
         raise ValueError(f"A test called “{test_id}” already exists — "
                          "delete or rename it first.")
     n = 0
+    root = tests_dir.resolve()          # canonical base for the check
     for info in zf.infolist():
         if info.is_dir():
             continue
         dest = (tests_dir / info.filename).resolve()
-        if not str(dest).startswith(str(tests_dir.resolve())):
+        # `startswith(str(root))` allows a sibling like `<root>_evil`. Use
+        # path-relative check so only entries made relative to the root pass.
+        try:
+            dest.relative_to(root)
+        except ValueError:
             raise ValueError("Archive contains unsafe paths.")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(zf.read(info))

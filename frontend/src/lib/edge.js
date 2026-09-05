@@ -67,15 +67,23 @@ export class EdgeOverlay {
     const anchors = ROIs.map(([fx0, fy0, fx1, fy1]) => {
       const X0 = Math.floor(fx0 * W), X1 = Math.ceil(fx1 * W),
             Y0 = Math.floor(fy0 * H), Y1 = Math.ceil(fy1 * H);
-      // local mean over the ROI (adaptive; falls back to global)
-      let ls = 0, ln = 0;
-      for (let y = Y0; y < Y1; y += 2)
-        for (let x = X0; x < X1; x += 2) { ls += lum[y * W + x]; ln++; }
-      const localMean = ln ? ls / ln : mean;
-      const darkTh = Math.min(localMean * 0.55, 105);
+      // Paper reference = 85th-percentile luminance of the ROI (sampled every
+      // 2 px).  Unlike a plain mean this stays anchored to the *bright paper*
+      // even when a shadow or glare band floods part of the corner, so the
+      // dark anchor is always a fixed gap below the local paper — the threshold
+      // rides along with the lighting instead of breaking under it.
+      const samples = [];
+      for (let y = Y0; y < Y1 - 1; y += 2)
+        for (let x = X0; x < X1 - 1; x += 2) samples.push(lum[y * W + x]);
+      samples.sort((a, b) => a - b);
+      const paper = samples.length
+        ? samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.85))]
+        : mean;
+      // gap follows exposure: darker scene → smaller absolute gap, clamped so a
+      // faint corner is never split and an overexposed paper never washes out.
+      const darkTh = Math.min(120, Math.max(38, paper - 42));
       const seen = new Uint8Array(W * H);
       let best = null;
-      const fcx = arguments.length;   // noop to silence linters
       for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) {
         const i0 = y * W + x;
         if (lum[i0] >= darkTh || seen[i0]) continue;
@@ -111,7 +119,25 @@ export class EdgeOverlay {
     const all4 = anchors.every(Boolean);
     let quad = null, alignedNow = false, coverage = 0, aspect = 0;
 
+    // Shape gate: the four raw anchors must make a plausible page quad.  A
+    // stray false-positive corner (dark shadow blob / branding mark) throws the
+    // diagonals off, so we refuse to lock onto it — the brackets keep hunting
+    // rather than snapping to a wrong shape.  Distance-based tests are
+    // mirror-invariant, so a front-facing camera still passes.
+    let valid = false;
     if (all4) {
+      const [a0, a1, a2, a3] = anchors;
+      const d1 = Math.hypot(a2.cx - a0.cx, a2.cy - a0.cy);   // TL→BR
+      const d2 = Math.hypot(a3.cx - a1.cx, a3.cy - a1.cy);   // TR→BL
+      const topRaw = Math.hypot(a1.cx - a0.cx, a1.cy - a0.cy);
+      const leftRaw = Math.hypot(a3.cx - a0.cx, a3.cy - a0.cy);
+      const arRaw = topRaw / Math.max(1, leftRaw);
+      const diagOk = Math.max(d1, d2) > 0 &&
+        Math.abs(d1 - d2) / Math.max(d1, d2) < 0.45;
+      valid = diagOk && arRaw > 0.45 && arRaw < 1.15;
+    }
+
+    if (all4 && valid) {
       // EMA smoothing — brackets glide instead of twitching
       if (!this.ema) this.ema = anchors.map((a) => ({ x: a.cx, y: a.cy, s: a.s }));
       const A = 0.42;

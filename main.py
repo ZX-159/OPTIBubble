@@ -32,6 +32,16 @@ def _open_browser(url: str) -> None:
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 
 
+def _write_port_file(path, port: int) -> None:
+    """Pub/record the port actually bound so the Tauri shell can learn it."""
+    if not path:
+        return
+    try:
+        Path(path).write_text(str(int(port)), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="OPTIBubble",
                                  description="Local OMR & mobile-bridge grading system")
@@ -43,6 +53,10 @@ def main() -> int:
     ap.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     ap.add_argument("--port", type=int, default=None, help="override the server port")
     ap.add_argument("--data-dir", default=None, help="override the data directory")
+    ap.add_argument("--port-file", default=None,
+                    help="write the actual bound HTTP port here so an external "
+                         "shell (e.g. the Tauri wrapper) can learn it when the "
+                         "configured port was busy and the engine fell back")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir).expanduser() if args.data_dir else None
@@ -76,6 +90,7 @@ def main() -> int:
         if not hub.start_server():
             print("Could not start server:", hub.server_error)
             return 1
+        _write_port_file(args.port_file, hub.settings.port)
         print(f"OPTIBubble server running → {hub.magic_url()}")
         print("Press Ctrl+C to stop.")
         try:
@@ -106,6 +121,7 @@ def main() -> int:
     if not hub.start_server():
         print("Could not start the app server:", hub.server_error)
         return 1
+    _write_port_file(args.port_file, hub.settings.port)
     url = f"http://127.0.0.1:{hub.settings.port}/"
     print(f"\n  OPTIBubble {__version__} running → {url}")
     print("  Press Ctrl+C to quit.")

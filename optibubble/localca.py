@@ -48,6 +48,15 @@ def ensure_ca(cert_dir: Path) -> Tuple[Path, Path]:
     ca_key = cert_dir / "optibubble-ca.key"
     if ca_cert.exists() and ca_key.exists():
         return ca_cert, ca_key
+    # If only ONE half exists, refuse to silently regenerate: doing so creates
+    # a brand-new root CA that every phone that already trusted the old one
+    # will reject (and iOS would need a fresh profile reinstall). A corrupt or
+    # missing key is a manual intervention, not something to paper over.
+    if ca_cert.exists() != ca_key.exists():
+        raise RuntimeError(
+            f"Local CA is incomplete ({ca_cert if ca_cert.exists() else ca_key} "
+            "missing its counterpart). Delete the leftover file and restart — "
+            "this ensures phones don't end up trusting a CA that has since changed.")
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([

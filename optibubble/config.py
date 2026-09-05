@@ -243,13 +243,22 @@ class TestConfig:
     def parse_key_text(self, text: str) -> int:
         """Populate the key from free text such as ``1:A 2:C`` or ``ACBD...``.
 
+        Letters are validated against *this test's* ``options_per_question``
+        (not a hard-coded ``[A-J]``), so ``1:A 2:F 3:C`` on a 4-option test
+        correctly skips the invalid ``F``.  The number of entries dropped
+        because they were out of range / invalid is stored on
+        ``self.last_key_dropped`` so callers can warn instead of silently
+        leaving a gap in the key.
+
         Returns the number of parsed entries.  Raises ValueError on garbage.
         """
         text = (text or "").strip().upper()
+        self.last_key_dropped = 0
         if not text:
             self.answer_key = {}
             return 0
-        kv = re.findall(r"(\d{1,3})\s*[:.\-]\s*([A-J])", text)
+        allowed = "[" + self.max_letters + "]"
+        kv = re.findall(r"(\d{1,3})\s*[:.\-]\s*(" + allowed + ")", text)
         if kv and len(kv) >= 2:
             new = {}
             for q, a in kv:
@@ -257,12 +266,16 @@ class TestConfig:
                 if 1 <= qi <= self.num_questions and a in self.max_letters:
                     new[qi] = a
             self.answer_key = new
+            # count entries the text carried but we couldn't apply
+            carried = len(re.findall(r"(\d{1,3})\s*[:.\-]\s*([A-Z])", text))
+            self.last_key_dropped = max(0, carried - len(new))
             return len(new)
         # compact form: "ABCDAACB..."
-        compact = re.sub(r"[^A-J]", "", text)
+        compact = re.sub(r"[^" + self.max_letters + "]", "", text)
         if compact:
             self.answer_key = {i + 1: a for i, a in enumerate(compact[: self.num_questions])
                                if a in self.max_letters}
+            self.last_key_dropped = len(re.sub(r"[^A-Z]", "", text)) - len(self.answer_key)
             return len(self.answer_key)
         raise ValueError("Could not parse the answer key text.")
 
