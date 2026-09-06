@@ -179,13 +179,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     container:
-      image: bilelmoussaoui/flatpak-github-actions:freedesktop-24.08
+      image: flatpak/flatpak-github-actions:freedesktop-24.08
       options: --privileged
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Flatpak
-        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v7
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v7
         with:
           bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
           manifest-path: packaging/flatpak/com.optibubble.app.yml
