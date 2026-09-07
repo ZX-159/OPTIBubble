@@ -1,30 +1,123 @@
+# OPTIBubble — Flatpak manifest (source-run, offline build).
+#
+# Design notes (see packaging/README.md):
+#   * The app runs from SOURCE Python, NOT a frozen PyInstaller binary. That
+#     sidesteps PyInstaller's /tmp/_MEIPASS extraction, which can fail against a
+#     read-only OSTree sandbox where /app is immutable. Data is written to the
+#     sandbox's persistent $XDG_DATA_HOME, so no _MEIPASS writes are needed at all.
+#   * Every runtime Python dependency is VENDORED as a wheel `sources` entry and
+#     installed with `--no-index` in `build-commands`. flatpak-builder downloads
+#     them during the source-download phase (network allowed there) and the
+#     sandbox compile runs fully offline — no `pip install`/`npm install` network
+#     pulls during the build. Re-run `python3 tools/flatpak_deps.py` after any
+#     requirements.txt change to refresh this list.
+#   * The React SPA (`optibubble/web/dist`) is built by CI *before* flatpak-builder
+#     snapshots the repo (`type: dir path: ../..`), so it ships in the bundle.
 app-id: com.optibubble.app
 runtime: org.freedesktop.Platform
 runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 command: optibubble
 
-# The app is a local Wi-Fi server + system browser UI, so it needs network
-# access and a way to open the user's default browser (via the portal).
 finish-args:
+  # The app is a local Wi-Fi server + a system-browser UI.
   - --share=network
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
   - --device=dri
+  # Data persistence: results/sheets/archive live in the sandboxed XDG data dir.
+  - --filesystem=xdg-data
+  # Let the user open/export documents through the portal.
+  - --filesystem=xdg-documents
+  # Make the app-installed Python packages importable at runtime.
+  - --env=PYTHONPATH=/app/lib/python3.12/site-packages
 
 modules:
+  # -- runtime Python dependencies, installed offline from vendored wheels ----
+  - name: python3-deps
+    buildsystem: simple
+    build-commands:
+      - python3 -m pip install --no-index --no-deps --prefix=/app wheels/*.whl
+
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/10/cb/f2ad4230dc2eb1a74edf38f1a38b9b52277f75bef262d8908e60d957e13c/blinker-1.9.0-py3-none-any.whl
+        sha256: ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/b1/db/dceb9dd5b231e1da801793f8acc9f3c52a7e1afe40bb1aae37e02b0faad5/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/6f/89/bb5108dc6c3651dca963f2b0a3ba19bbcb370c94e1b6d3e0e844a58e6dca/charset_normalizer-3.5.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: b9af956078716df40d985fb0dfeb2c2120c5ca92ba4ff4b388acfd01cdc14d08
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/58/50/6c0d534c5f134586a8e1ba4e330569e32f057e33372ae556463212fb4cd3/click-8.5.0-py3-none-any.whl
+        sha256: 255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/85/66/6ccca4722987ddedaa7fc9c3f4708af7431f5535666c174350830888c6b7/cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl
+        sha256: 51afcfceb15597cf2635068e4ac9a56b2abde622edde17f37d85fd7b5306497a
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl
+        sha256: f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl
+        sha256: c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl
+        sha256: 85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/3c/2e/8d0c2ab90a8c1d9a24f0399058ab8519a3279d1bd4289511d74e909f060e/markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: d6dd0be5b5b189d31db7cda48b91d7e0a9795f31430b7f271219ab30f1d3ac9d
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/65/af/aa78d1a88805456e212b65461354cd943197fb9acecc4c90fd12295123a3/numpy-2.5.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: b7e18c623bb5c95acb3b3328861272816ba199fb531921c5d6d0b675f1fde9e3
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/8f/96/97f176047c56726a61ddd02300b45b35d1451278c6182688a1fb27035e81/opencv_python-4.14.0.94-cp37-abi3-manylinux_2_28_x86_64.whl
+        sha256: 726a2b40c1120a0bbd0116394c6a5b2aa0a4dfa4e609a81ee10d12c6a34cd372
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/84/21/a35af28dcc61f37ed850a2d64c65c701321dfbf25085e469d5559360cbbf/pillow-12.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
+        sha256: b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/c7/06/dace3e27af26690cb20bead80dbac42941b0841eb689b8aabbd67dde16f0/pymupdf-1.28.2-cp310-abi3-manylinux_2_28_x86_64.whl
+        sha256: 397d6715c1f0df7548a92d0afd8ce370fc48fa47aeefac16be2bc04a16a8227f
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/dd/b8/d2d6d731733f51684bbf76bf34dab3b70a9148e8f2cef2bb544fccec681a/qrcode-8.2-py3-none-any.whl
+        sha256: 16e64e0716c14960108e85d853062c9e8bba5ca8252c0b4d0231b9df4060ff4f
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/db/cb/dacbc268cb68d0428ea2cbd85266195a9ab3e677449589ddae59bd7542ac/reportlab-5.0.1-py3-none-any.whl
+        sha256: 1c36e6bb0e71780c72331eba60da7f602e8d4389a8723825af71342e49d791e8
+        dest: wheels
+      - type: file
+        url: https://files.pythonhosted.org/packages/93/8c/2e650f2afeb7ee576912636c23ddb621c91ac6a98e66dc8d29c3c69446e1/werkzeug-3.1.8-py3-none-any.whl
+        sha256: 63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50
+        dest: wheels
+
+
+  # -- the application --------------------------------------------------------
   - name: optibubble
     buildsystem: simple
     build-commands:
-      # Python deps into /app (the Freedesktop SDK ships python3 + pip)
-      - pip3 install --prefix=/app --no-build-isolation -r requirements.txt
-      # The application itself (engine + web UI + bundled fonts)
       - mkdir -p /app/optibubble-app
       - cp -r main.py optibubble /app/optibubble-app/
-      # Launcher wrapper — keeps data inside the Flatpak sandbox home
       - install -Dm755 packaging/flatpak/optibubble.sh /app/bin/optibubble
-      # Desktop integration
       - install -Dm644 packaging/flatpak/com.optibubble.app.desktop
         /app/share/applications/com.optibubble.app.desktop
       - install -Dm644 packaging/flatpak/com.optibubble.app.metainfo.xml
@@ -33,7 +126,16 @@ modules:
         /app/share/icons/hicolor/512x512/apps/com.optibubble.app.png
       - install -Dm644 src-tauri/icons/128x128.png
         /app/share/icons/hicolor/128x128/apps/com.optibubble.app.png
-
     sources:
       - type: dir
         path: ../..
+        # Only the files the build needs are copied into the sandbox. The
+        # React bundle (optibubble/web/dist) is present because CI builds it
+        # first; node_modules/.git/build dirs are excluded to keep the build lean.
+        files:
+          - main.py
+          - optibubble
+          - assets
+          - src-tauri/icons
+          - packaging/flatpak
+

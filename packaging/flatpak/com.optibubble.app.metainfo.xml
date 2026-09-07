@@ -4,30 +4,31 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0</project_license>
   <name>OPTIBubble</name>
-  <summary>Local computer-vision OMR grading with a mobile-bridge scanner</summary>
+  <summary>Local optical-mark reader — scan paper sheets with your phone</summary>
   <description>
     <p>
-      OPTIBubble turns any classroom into a scanning room: print dynamically
-      generated MCQ answer sheets, let students photograph them with any phone
-      browser over local Wi-Fi, and grade everything on the teacher's computer
-      with OpenCV — in milliseconds, with zero cloud involvement.
+      OPTIBubble turns your computer into a local optical mark reader. Print the
+      answer sheets, photograph them with any phone browser over your own
+      Wi-Fi, and see the results on your computer — in milliseconds, with zero
+      cloud involvement. No cloud, no account, nothing to install on the phone.
     </p>
     <p>
-      Ambiguous marks (blank, double-marked, faint) are flagged for human
-      review with cropped evidence images, and verified results export to CSV
-      instantly. 100% local: no accounts, no telemetry, no internet required.
+      It reads filled bubbles reliably, flags ambiguous marks (blank,
+      double-marked, faint) for review with cropped evidence images, and exports
+      verified results to CSV instantly. A4 and US Letter are both supported,
+      from 2 to 102 questions. 100% local: everything runs on your machine.
     </p>
   </description>
   <launchable type="desktop-id">com.optibubble.app.desktop</launchable>
-  <url type="homepage">https://github.com/your-username/OPTIBubble</url>
-  <url type="bugtracker">https://github.com/your-username/OPTIBubble/issues</url>
+  <url type="homepage">https://github.com/ZX-159/OPTIBubble</url>
+  <url type="bugtracker">https://github.com/ZX-159/OPTIBubble/issues</url>
   <developer_name>OPTIBubble contributors</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="1.0.0" date="2026-08-25">
+    <release version="2.0.2" date="2026-09-07">
       <description>
-        <p>Initial release: sheet generator, mobile scanner bridge, OpenCV
-        grading engine with confidence flagging, review queue and CSV export.</p>
+        <p>General-user release: rebuilt web UI, three-pass mark detection,
+        auto-heal for bad scans, HTTPS bridge, and offline Flatpak packaging.</p>
       </description>
     </release>
   </releases>

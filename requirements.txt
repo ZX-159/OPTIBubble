@@ -1,10 +1,28 @@
 # OPTIBubble — runtime dependencies (the whole app is local-first Python)
-cryptography>=41        # local CA for the HTTPS mobile camera bridge
-flask>=3.0
-numpy>=1.24
-opencv-python>=4.8
-Pillow>=10.0
-pymupdf>=1.24          # sheet preview rendering + selftest rasteriser
-qrcode>=7.4
-reportlab>=4.0
-werkzeug>=3.0
+#
+# Every line is FROZEN (==) to the current stable release. This removes upstream
+# version drift in automated runner environments (GitHub Actions, Flatpak) where
+# `>=` ranges would otherwise silently pull incompatible builds. Future bumps are
+# intentional, reviewed changes.
+#
+# NOTE: `tauri` is a Rust crate, not a Python package — it lives in
+# src-tauri/Cargo.toml (already the latest 2.x). Everything below is Python.
+
+# OCR / CV engine
+opencv-python==4.14.0.94      # latest STABLE 4.x (5.0.0.93 is an early preview)
+numpy==2.5.3
+
+# Web server
+Flask==3.1.3
+Werkzeug==3.1.8
+
+# Sheet generation + rendering
+reportlab==5.0.1
+Pillow==12.3.0
+PyMuPDF==1.28.2
+
+# QR magic-link generation
+qrcode==8.2
+
+# Local CA / Trusted HTTPS bridge
+cryptography==50.0.1

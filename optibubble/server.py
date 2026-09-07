@@ -37,9 +37,9 @@ from flask import (Flask, Response, jsonify, request, send_file, abort)
 
 from .hub import Hub
 from .storage import CSV_COLUMNS
+from .config import WEB_DIR
 
 MAX_CONTENT_LENGTH_MB = 100
-WEB_DIR = Path(__file__).resolve().parent / "web"
 
 
 def _web_path(sub: str, name: str) -> Path:

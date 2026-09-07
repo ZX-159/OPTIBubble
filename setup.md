@@ -49,7 +49,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 python selftest.py                 # end-to-end suite — 85 checks, all green
-python main.py                     # app opens at http://127.0.0.1:5000
+python main.py                     # app opens at http://127.0.0.1:8090
 ```
 
 Handy commands while developing:
@@ -102,7 +102,7 @@ cargo tauri build                          # installers → src-tauri/target/rel
 
 The shell launches `python3 main.py --no-browser` and reads the engine's real
 port from a `--port-file`, so it opens the window at whatever port the engine
-actually bound (it falls back automatically if 5000 is occupied). Building
+actually bound (it falls back automatically if 8090 is occupied). Building
 from source on a dev machine needs Python + `pip install -r requirements.txt`;
 a release installer freezes the engine with PyInstaller (§4.6) so end users
 need nothing installed.
@@ -139,7 +139,7 @@ flatpak build-bundle .flatpak-repo OPTIBubble.flatpak com.optibubble.app
 Mobile browsers hard-gate the in-page camera (`getUserMedia`) behind a *secure
 context* — there is no JavaScript workaround. The realistic options, ranked:
 
-| Approach | Student friction | Needs internet? | Verdict |
+| Approach | Phone-side friction | Needs internet? | Verdict |
 |---|---|---|---|
 | **Trusted cert via Let's Encrypt DNS-01 + free DuckDNS domain** (built in: Settings → HTTPS mode → *Trusted*) | **none** — camera works in every browser, one QR scan | once at issuance (auto-renews ~30 days before expiry) | ✅ best UX — the Home Assistant pattern for local HTTPS |
 | Built-in local CA + code A install (built in, offline mode) | iOS: install profile + trust toggle (once). Android: Firefox or fallback | never | ✅ keep for fully offline networks |
@@ -542,7 +542,7 @@ inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
 | Actions release has no artifacts | check the *Actions* log — the release jobs only run on `v*` tags or manual dispatch |
 | Flatpak job fails | it needs the privileged container (already configured); try deleting the cache key and re-running |
 | Tauri window opens to an error page | the Python engine failed to start — run `python main.py` once to see why |
-| Port 5000 busy (macOS) | AirPlay Receiver uses 5000 — `python main.py --port 5050` (HTTPS bridge: `https_port` in Settings) |
+| Port 8090 busy | The default is 8090 (not 5000, which macOS AirPlay Receiver occupies) — `python main.py --port 8091` (HTTPS bridge: `https_port` in Settings) |
 | Phone still warns after certificate install | Android Chrome ignores user CAs — use Firefox, or the 🖼️ upload fallback; also check the IP selector matches the phone's network |
 | HTTPS bridge not starting | port 5443 busy or `cryptography` missing → see the log card; the HTTP scanner + native-camera fallback keep working |
 | Self-test fails locally | reinstall deps (`pip install -r requirements.txt`) — OpenCV/numpy version mismatch is the usual cause |

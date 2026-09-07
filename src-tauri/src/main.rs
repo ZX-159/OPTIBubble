@@ -7,10 +7,11 @@
 //   3. opens a native window pointed at the local web app,
 //   4. kills the backend when the window closes.
 //
-// The engine deliberately falls back to 5001..5009 when the configured port
-// (default 5000) is already in use (e.g. macOS AirPlay Receiver). It publishes
-// the port it actually bound to a temp file via `--port-file`; this shell reads
-// that file so the native window is never pointed at a dead port.
+// The engine deliberately falls back to the next free port when the configured
+// default (8090) is already in use. It publishes the port it actually bound to a
+// temp file via `--port-file`; this shell reads that file so the native window is
+// never pointed at a dead port. (8090 is a high, unassigned range that avoids the
+// macOS AirPlay Receiver collision on 5000.)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -23,11 +24,11 @@ use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 const HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 5000;
+const DEFAULT_PORT: u16 = 8090;
 
 /// Where the engine publishes the port it actually bound. The shell passes this
 /// path to `python main.py --port-file …`; reading it avoids the hard-coded
-/// 5000 assumption that breaks whenever the engine falls back.
+/// port assumption that breaks whenever the engine falls back.
 fn port_file() -> PathBuf {
     std::env::temp_dir().join("optibubble-port.txt")
 }
@@ -105,7 +106,7 @@ fn wait_for_backend(timeout: Duration) -> u16 {
     DEFAULT_PORT
 }
 
-/// Build the main webview at the *actual* serving port (not hard-coded 5000).
+/// Build the main webview at the *actual* serving port (not hard-coded).
 fn build_window(app: &tauri::App, port: u16) -> tauri::Result<()> {
     let url_str = format!("http://{}:{}/", HOST, port);
     // The URL is built from constants, so parsing cannot fail in practice.
@@ -133,7 +134,7 @@ fn main() {
     };
 
     // The engine publishes the port it actually bound; read it once and open
-    // the window there (never hard-code 5000, which the engine may have
+    // the window there (never hard-code, which the engine may have
     // fallen back from on a busy machine).
     let port = wait_for_backend(Duration::from_secs(30));
     eprintln!("OPTIBubble engine serving on http://{}:{}/", HOST, port);

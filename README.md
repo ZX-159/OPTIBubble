@@ -2,9 +2,9 @@
 
 <img src="docs/hero.png" alt="OPTIBubble" width="860"/>
 
-**Local computer-vision OMR grading with a zero-install mobile scanner.**
+**Your local optical-mark reader — a zero-install mobile scanner.**
 
-Print dynamic answer sheets → users photograph them with **any phone browser** over Wi-Fi → OpenCV grades them on **your** computer → ambiguous marks land in a review queue → export to CSV.
+Print the sheets → photograph them with **any phone browser** over Wi-Fi → OpenCV reads and grades them on **your** computer → ambiguous marks land in a review queue → export to CSV. No cloud, no account, no app store.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Tauri 2](https://img.shields.io/badge/native%20shell-Tauri%202-FFC131?logo=tauri&logoColor=white)](#-native-app-tauri-optional)
@@ -66,14 +66,14 @@ applied to the embedded wordmark and the header rule.
 
 | | |
 |---|---|
-| 🖨 **Dynamic sheet generator** | 2–102 questions, 2–5 options (A–B … A–E), auto multi-column layout, up to 10-digit student-ID grid, session QR code, four machine-vision alignment anchors. A4 & US Letter. |
+| 🖨 **Dynamic sheet generator** | 2–102 questions, 2–5 options (A–B … A–E), auto multi-column layout, up to 10-digit respondent-ID grid, session QR code, four machine-vision alignment anchors. A4 & US Letter. |
 | 📷 **USB document camera station** | Plug any USB doc cam / webcam into the PC and grade without phones — live preview on Scan & Serve plus one-click *Capture & grade* through the same pipeline. |
 | ⚖️ **Weighted scoring & partial credit** | Per-question points (e.g. `5:2, 9-12:3`) and an automatic partial-credit fraction for double-marks that still contain the key. |
 | 📈 **Psychometric analytics** | Per test: item error rates, discrimination (point-biserial) and **KR-20 reliability**, rendered live on the Dashboard and Results pages as a **radial KR-20 gauge**, a **score-distribution histogram** with a mean line, and **toughest-question bars** with discrimination dots — all as dependency-free, theme-aware inline SVG (fast, no chart library). |
 | 🔐 **Archiving: export & import** | One button packages a whole test — sheet, key, photos, crops, results — into a `.optibubble` file for flash drives, **with an optional password** (AES-256 when set, plain when not); the matching **Import** button restores it on any machine. |
 | 📡 **Phone mirror (WebRTC)** | The phone's live viewfinder streams to the desktop over the LAN — check framing at a glance while the phone stays the hand scanner. |
 | 🎯 **Live anchor-lock overlay** | The phone viewfinder finds the four printed black squares in real time (on-device flood-fill + square filters, ~4 ms/frame) and locks corner brackets onto them; when a corner is hidden it falls back to a Sobel-edge framing quad. An *aligned — hold steady* state plus optional **auto-capture** when the sheet is stable. |
-| 🔢 **Digit-aware student-ID review** | Flagged ID rows offer 0–9 (not A–D!); picking a digit writes it straight into the ID field, and the keyboard follows the same rule. |
+| 🔢 **Digit-aware respondent-ID review** | Flagged ID rows offer 0–9 (not A–D!); picking a digit writes it straight into the ID field, and the keyboard follows the same rule. |
 | 🔎 **Result detail view** | Click any graded row for a per-question breakdown — score tiles plus colour-coded answer chips from the stored JSON. |
 | 📊 **System info & in-app self-test** | Settings → System shows version, Python/OpenCV/platform, storage used, network + HTTPS status and lifetime counters — plus a button that runs the full self-test suite and prints the verdict in-app. |
 | ⚛️ **React + Tailwind + Motion front-end** | The desktop app and phone scanner are a single React SPA (Vite build served by the engine — still zero-internet) with a complete interactive-state system: loading, error, success, idle, hover, focus-visible, active and disabled states on every control. |
@@ -103,7 +103,7 @@ applied to the embedded wordmark and the header rule.
 │   ├── Test setup + answer key ──► printable sheet.pdf (ReportLab)       │
 │   │                                    │                                │
 │   └── Embedded Flask server ◄───────────┘   magic link + QR             │
-│        │   http://192.168.x.x:5000/scan/<session>                       │
+│        │   http://192.168.x.x:8090/scan/<session>                       │
 └────────┼─────────────────────────────────────────────────────────────────┘
          │  local Wi-Fi (phones & PC on the same router)
    ┌─────┴─────┐  ┌───────────┐  ┌───────────┐
@@ -239,7 +239,7 @@ python selftest.py
 
 Builds a sheet, simulates filled bubbles (pen strokes, partial marks), synthesises phone
 photos (perspective jitter, brightness gradients, sensor noise, JPEG artefacts) across
-random seeds, and asserts exact scores, flag types, student-ID reads, the full HTTP
+random seeds, and asserts exact scores, flag types, respondent-ID reads, the full HTTP
 stack, the HTTPS bridge, archive round-trips and the < 3 s latency budget — expect
 **all green** (85 checks).
 
@@ -259,9 +259,9 @@ along the flow — Create → Collect → Grade.
    / `ACBD…`, or randomise). **Create test & generate sheet.** The Dashboard then shows
    the test as *active* and the QR magic-link as the next step.
 2. **Scan & Serve** — open the sheet PDF and print at **100 % (“Actual size”)**.
-   Hand out the sheets. Press **Start server** — the QR magic link appears; students
+   Hand out the sheets. Press **Start server** — the QR magic link appears; people
    open it and scan filled sheets.
-3. Users scan it with the phone's regular camera; the scanner opens in the browser.
+3. Anyone scans it with the phone's regular camera; the scanner opens in the browser.
    They photograph the sheet with all four corner squares inside the frame.
 4. Results stream in live. Confident sheets are graded and exported instantly;
    anything ambiguous lands in **Review Queue** with a cropped image of the disputed
@@ -353,8 +353,8 @@ cargo tauri build    # installers → src-tauri/target/release/bundle/
 The shell detects whether the engine is already running, spawns
 `python main.py --no-browser` if not (passing a `--port-file` so it always
 learns the port the engine actually bound — even when it had to fall back from
-5000), waits for it, opens the native window at that port, and shuts the engine
-down on exit.
+the default `8090`), waits for it, opens the native window at that port, and
+shuts the engine down on exit.
 
 ➡ **Full instructions — local builds, GitHub upload, Actions release matrix,
 Flatpak/RPM recipes — live in [`setup.md`](setup.md).**
@@ -468,7 +468,16 @@ Every threshold above is a live control in **Settings → OMR engine**.
 
 ## 📁 Data & CSV schema
 
-Everything is stored under `~/OPTIBubbleData/` (shown in the sidebar):
+Everything is stored in a single per-user data folder (shown in the sidebar). The
+location follows your OS convention and honours `XDG_DATA_HOME` when set:
+
+| OS | Default data folder |
+|---|---|
+| Linux | `$XDG_DATA_HOME/OPTIBubbleData` (falls back to `~/OPTIBubbleData`) |
+| Windows | `%LOCALAPPDATA%\OPTIBubbleData` (falls back to `%APPDATA%`) |
+| macOS | `~/Library/Application Support/OPTIBubbleData` |
+
+Inside it:
 
 ```
 ~/OPTIBubbleData/
@@ -487,7 +496,7 @@ Everything is stored under `~/OPTIBubbleData/` (shown in the sidebar):
 | Column | Meaning |
 |---|---|
 | `Timestamp` | when the sheet was finalised |
-| `Student_ID` | read from the bubble ID grid (editable in review) |
+| `Student_ID` | the respondent's/candidate's ID, read from the bubble ID grid (editable in review) |
 | `Test_ID`, `Test_Title` | session identifiers |
 | `Total_Score`, `Max_Score`, `Percent` | the grade |
 | `Detailed_Answers_JSON` | full per-question breakdown: answers, correctness, flags, confidence |
@@ -509,7 +518,7 @@ Everything is stored under `~/OPTIBubbleData/` (shown in the sidebar):
 | Auto-accept blanks | off | blank = wrong without appearing in review |
 | Save flattened pages | off | keep a top-down PNG per sheet (debug / audit) |
 | JPEG quality / capture width | 92 / 2048 | phone-side capture quality |
-| Port / bind / max upload | 5000 / 0.0.0.0 / 30 MB | server controls |
+| Port / bind / max upload | 8090 / 0.0.0.0 / 30 MB | server controls |
 | Master CSV | on | append everything to one combined file |
 
 Changes apply to the next processed sheet and persist in `settings.json`.
@@ -578,7 +587,7 @@ Open the <b>Results</b> page → <i>Export CSV copy</i>. The <code>Detailed_Answ
 <details>
 <summary><b>The QR code doesn't open anything.</b></summary>
 
-Check that (1) the phone is on the same Wi-Fi, (2) your firewall allows Python/OPTIBubble on port 5000, (3) the URL under the QR matches this computer's IP (switch the IP selector if you have several adapters). On some routers “AP/client isolation” blocks phone→PC traffic — disable it in the router admin.
+Check that (1) the phone is on the same Wi-Fi, (2) your firewall allows Python/OPTIBubble on port 8090, (3) the URL under the QR matches this computer's IP (switch the IP selector if you have several adapters). On some routers “AP/client isolation” blocks phone→PC traffic — disable it in the router admin.
 </details>
 <details>
 <summary><b>Can I run this as a native desktop app?</b></summary>
@@ -592,7 +601,7 @@ Yes — the bundled Tauri 2 shell (<code>src-tauri/</code>) wraps the same UI in
 
 | Symptom | Fix |
 |---|---|
-| `Port 5000 already in use` | Change the port in **Settings → Local server** (macOS: AirPlay Receiver also uses 5000), or `python main.py --port 5050` |
+| `Port 8090 already in use` | Change the port in **Settings → Local server**, or `python main.py --port 8091`. The default is 8090 rather than 5000 precisely because macOS AirPlay Receiver occupies 5000 — if you were told to "change the port away from 5000", it already is. |
 | Phone can't reach the link | Same network? Firewall? Wrong IP in the selector? AP-isolation disabled? |
 | Everything grades as blank | Print at 100% scale; use the generated PDF; raise “Binarisation offset” slightly for very light pencils |
 | Too many faint flags | Lower the “Faint-mark ceiling” or raise `t_fill` in Settings |
@@ -641,7 +650,7 @@ OPTIBubble/
 | OS | Status | Notes |
 |---|---|---|
 | Windows 10/11 | ✅ primary | Defender firewall prompt on first server start |
-| macOS 12+ | ✅ | Change port if AirPlay Receiver occupies 5000 |
+| macOS 12+ | ✅ | Default port 8090 avoids the AirPlay Receiver port 5000 |
 | Linux (X11/Wayland) | ✅ | `python3-tk` not required — the UI is web-based |
 
 ---
