@@ -1,37 +1,63 @@
 # ============================================================================
 # OPTIBubble — main.yml
-# One workflow: CI on every push/PR, release builds on tags (v*) or manual run.
 #
-#   push / pull_request   → job "selftest" + "rust-check" (fast, ~2 min)
-#   tag v* / dispatch     → selftest + installers for every platform:
-#                           Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
-#                           Linux AppImage + deb + RPM · Flatpak bundle
+# Two kinds of run:
 #
-# IMPORTANT — why rust-check freezes the engine:
-#   Tauri's build script resolves the `engine/*` resource glob from tauri.conf
-#   DURING `cargo check`. If `src-tauri/engine/` is empty the build fails with
-#   "glob pattern engine/* path not found or didn't match any files". CI never
-#   produced those files, so rust-check failed. We freeze the engine first here
-#   and also commit a `.gitkeep` in `src-tauri/engine/` so the glob resolves
-#   even on a fresh clone (and for local `cargo build`).
+#   (1) CI — automatic, no inputs. Triggers on EVERY push to main and every
+#       pull_request, so a new commit produces a build immediately. It runs the
+#       end-to-end self-test and a `cargo check` of the Tauri shell.
 #
-# No secrets required. Release is created as a DRAFT — review and publish at
-# github.com/<you>/OPTIBubble/releases (see setup.md → "Cutting a release").
+#   (2) RELEASE — manual. Trigger it from the Actions tab → "Build & Release"
+#       → Run workflow. You fill in:
+#           • release_version  (required)  e.g. 2.0.3
+#           • release_notes    (optional)
+#       No git tag is needed. It builds ALL the platform installers in
+#       parallel (Windows MSI+NSIS · macOS dmg arm/intel · Linux deb+rpm+AppImage),
+#       plus the Flatpak bundle, generates SHA256SUMS, and opens the release as a
+#       DRAFT for you to review and publish.
+#
+# CACHING (keep reused builds fast):
+#   • npm  → frontend/node_modules           (actions/setup-node cache)
+#   • pip  → the Python engine deps         (actions/setup-python cache)
+#   • cargo→ src-tauri build output          (swatinem/rust-cache)
+#   • the frozen PyInstaller engine          (actions/cache, keyed on source+SPA
+#                                            hash — REMAINS VALID ACROSS version
+#                                            bumps; the freeze is skipped on hit)
+#   • Flatpak builder state                  (flatpak-builder cache-key)
+#
+# No signing secrets are required — the release is a DRAFT. Add your Windows /
+# macOS signing credentials later to clear first-run OS warnings (setup.md).
 # ============================================================================
 name: Build & Release
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [main]        # auto CI on every commit to main (no tag required)
   pull_request:
+  # Manual release. No tag gate — you specify the version typed here.
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version (e.g. 2.0.3) — tags the draft release"
+        required: true
+        type: string
+        default: "2.0.2"
+      release_notes:
+        description: "Release notes (optional)"
+        required: false
+        type: string
+        default: ""
 
 permissions:
-  contents: write
+  contents: read
+  checks: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Include the event so a manual release (dispatch) doesn't cancel an in-flight
+  # CI run on the same branch, and vice-versa. Same-event runs still supersede
+  # each other (a new push cancels the previous push; a second dispatch cancels
+  # the first).
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -39,22 +65,30 @@ jobs:
   selftest:
     name: Self-test (end-to-end)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
+      # Node first (release directive): the React SPA must be built before the
+      # Python engine/selftest reads optibubble/web/dist.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - name: Build the React SPA
         run: cd frontend && npm ci --no-audit --no-fund && npm run build
+
+      - name: Assert the SPA bundle exists
+        run: test -f optibubble/web/dist/index.html
 
       - name: Install engine dependencies
         run: pip install -r requirements.txt
@@ -66,6 +100,8 @@ jobs:
   rust-check:
     name: Rust shell (cargo check)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -75,10 +111,17 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Linux system dependencies (WebKit)
         run: |
@@ -87,6 +130,10 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file pkg-config
 
       # The `engine/*` bundle glob must resolve for the Tauri build script.
+      # Build the SPA first, then freeze the engine into src-tauri/engine/.
+      - name: Build the React SPA
+        run: cd frontend && npm ci --no-audit --no-fund && npm run build
+
       - name: Freeze the Python engine (single self-contained binary)
         run: |
           pip install -r requirements.txt pyinstaller
@@ -95,25 +142,64 @@ jobs:
       - name: cargo check (src-tauri)
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
-  # ------------------------------------------------- release: native shells -
+  # ------------------------------------------------ release: create the tag -
+  # Single point that creates the draft release + tag (v<version>). Doing this
+  # HERE — rather than in every installer/Flatpak job — stops the parallel
+  # builder jobs from racing to create the same release. They all just upload
+  # assets to the release this job made.
+  prepare-release:
+    name: Create draft release (v${{ inputs.release_version }})
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create (or update) the draft release + tag
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.release_version }}
+          name: "OPTIBubble v${{ inputs.release_version }}"
+          body: "${{ inputs.release_notes || 'Run **Build & Release** on GitHub, review the draft below, then publish.' }}"
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------- release: installers ---
+  # One matrix row per deliverable, all running IN PARALLEL. Linux is split
+  # into deb + rpm + AppImage (three rows) so they build concurrently; Windows
+  # and macOS run alongside. Every row syncs the release version into the app
+  # so the installer reports the right version, then uploads to the SAME draft
+  # release (v<version>) created by prepare-release.
   tauri:
-    name: ${{ matrix.platform }} installers
-    needs: selftest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    name: ${{ matrix.name }}
+    needs: [selftest, prepare-release]
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux: AppImage + deb + RPM from one build
-          - platform: ubuntu-22.04
-            args: ""
-          # macOS: Apple Silicon + Intel
-          - platform: macos-latest
+          - name: Linux .deb
+            platform: ubuntu-22.04
+            args: "--bundles deb"
+          - name: Linux .rpm
+            platform: ubuntu-22.04
+            args: "--bundles rpm"
+          - name: Linux AppImage
+            platform: ubuntu-22.04
+            args: "--bundles appimage"
+          - name: macOS dmg (Apple Silicon)
+            platform: macos-latest
             args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
+          - name: macOS dmg (Intel)
+            platform: macos-latest
             args: "--target x86_64-apple-darwin"
-          # Windows: MSI + NSIS setup
-          - platform: windows-latest
+          - name: Windows MSI + NSIS
+            platform: windows-latest
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
@@ -124,9 +210,25 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      # Cargo cache is keyed on the committed Cargo.toml/Cargo.lock, so restore
+      # happens BEFORE we bump the version — this keeps heavy Rust deps cached
+      # even when you release a new version number (only the thin app crate + the
+      # version string recompile).
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Linux system dependencies (WebKit)
         if: matrix.platform == 'ubuntu-22.04'
@@ -135,37 +237,49 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
+      # Now stamp the release version into the app (after cargo cache, so the
+      # cache key stays stable). The installer and printout report this version.
+      - name: Sync the release version into the app
+        run: python tools/sync_version.py "${{ inputs.release_version }}"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      # The React SPA must be built BEFORE freezing — optibubble/web/dist is a
-      # build artifact, not committed, so without this step every installer
-      # ships only the legacy app.html/scan.html and not the React UI.
+      # The React SPA MUST be built before freezing/verifying — optibubble/web/dist
+      # is a build artifact, not committed, so every installer would otherwise ship
+      # only the legacy HTML pages.
       - name: Build the React SPA
         run: cd frontend && npm ci --no-audit --no-fund && npm run build
 
-      # The `engine/*` bundle glob needs the frozen binary in place before the
-      # Tauri build script resolves it (same reason as rust-check).
-      - name: Freeze the Python engine (single self-contained binary)
-        run: |
-          pip install -r requirements.txt pyinstaller
-          pyinstaller optibubble.spec --distpath src-tauri/engine --workpath build-engine --noconfirm
+      - name: Assert the SPA bundle exists
+        run: test -f optibubble/web/dist/index.html
 
-      - name: Build bundles & attach to the draft release
+      # Reuse the frozen engine across runs. Keyed on the SOURCE (not the version),
+      # so an unchanged engine is restored from cache and the freeze is skipped —
+      # this is the big "don't rebuild what didn't change" win for release runs.
+      - name: Restore the frozen engine from cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/engine/optibubble-engine*
+            build-engine
+          key: engine-${{ runner.os }}-${{ hashFiles('main.py','optibubble/**','optibubble.spec','requirements.txt') }}
+          # NOTE: no restore-keys fallback here. A fuzzy restore could hand back
+          # an engine built from OLD source, silently shipping stale code. We
+          # only reuse an exact source-match; anything else is rebuilt.
+
+      - name: Freeze the Python engine (if not cached)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN="src-tauri/engine/optibubble-engine.exe"; else BIN="src-tauri/engine/optibubble-engine"; fi
+          if [ ! -f "$BIN" ]; then
+            pip install -r requirements.txt pyinstaller
+            pyinstaller optibubble.spec --distpath src-tauri/engine --workpath build-engine --noconfirm
+          fi
+
+      - name: Build ${{ matrix.name }} & attach to the draft release
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: .
-          tagName: v__VERSION__
-          releaseName: "OPTIBubble v__VERSION__"
-          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Each installer is fully self-contained (Python engine frozen into a single binary). Unpack and run the installer for your OS."
+          # Auto-rev version identifiers to match the tag created by prepare-release.
+          tagName: v${{ inputs.release_version }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -175,8 +289,10 @@ jobs:
   # ----------------------------------------------------- release: Flatpak ---
   flatpak:
     name: Flatpak bundle
-    needs: selftest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [selftest, prepare-release]
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     container:
       image: flatpak/flatpak-github-actions:freedesktop-24.08
@@ -184,18 +300,76 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Flatpak
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The manifest snapshots the repo (type: dir path: ../..), so the React
+      # bundle MUST already be built into optibubble/web/dist before flatpak-builder.
+      - name: Build the React SPA
+        run: cd frontend && npm ci --no-audit --no-fund && npm run build
+
+      - name: Assert the SPA bundle exists
+        run: test -f optibubble/web/dist/index.html
+
+      - name: Build Flatpak (offline, vendored wheels)
         uses: flatpak/flatpak-github-actions/flatpak-builder@v7
         with:
-          bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
+          bundle: OPTIBubble_${{ inputs.release_version }}_x86_64.flatpak
           manifest-path: packaging/flatpak/com.optibubble.app.yml
-          cache-key: flatpak-builder-${{ github.sha }}
+          cache-key: flatpak-builder-${{ github.run_id }}
 
-      - name: Attach bundle to the release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach the bundle to the release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ inputs.release_version }}
           draft: true
           files: OPTIBubble_*_x86_64.flatpak
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --------------------------------------- release: SHA256SUMS (supply chain) -
+  checksums:
+    name: Generate SHA256SUMS
+    needs: [tauri, flatpak]
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      # The release is a DRAFT, so `gh release download` errors (cli/cli#10797).
+      # Pull the assets over the REST API instead, which works for drafts.
+      - name: Download the draft release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets && cd assets
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/v${{ inputs.release_version }}" \
+            -o release.json
+          python3 - <<'PY'
+          import json, os, subprocess
+          rel = json.load(open("release.json"))
+          for a in rel.get("assets", []):
+              subprocess.run([
+                  "curl", "-fsSL",
+                  "-H", f"Authorization: Bearer {os.environ['GH_TOKEN']}",
+                  "-H", "Accept: application/octet-stream",
+                  "-o", a["name"], a["url"],
+              ], check=True)
+          PY
+          rm -f release.json SHA256SUMS
+
+      - name: Generate SHA256SUMS
+        run: cd assets && sha256sum * > SHA256SUMS
+
+      - name: Attach the checksums file to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.release_version }}
+          draft: true
+          files: assets/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

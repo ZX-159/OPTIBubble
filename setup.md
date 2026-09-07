@@ -241,279 +241,114 @@ engine into the sandbox at build time). Notes:
   support); a full Rust port would shrink the binary but means rewriting a
   tested engine — the frozen route keeps one codebase.
 
-## 5 · Releasing via GitHub Actions
+## 5 · Releasing via GitHub Actions (manual — no tag needed)
 
 The repo ships **one workflow**, `.github/workflows/main.yml`, that does both
-CI and releases:
+CI and releases. Releases are **triggered by hand** from the Actions tab — there
+is **no git-tag requirement**. You type a release version (required) and notes
+(optional) when you trigger it.
 
 | Trigger | What runs | Duration |
 |---|---|---|
-| every push / PR | `selftest` job only — installs deps, runs `python selftest.py` | ~1 min |
-| **tag `v*`** (e.g. `v1.0.0`) | selftest **+ all installers below**, attached to a draft GitHub Release | 10–25 min |
-| *Actions → Build & Release → Run workflow* | same as a tag (manual test build) | 10–25 min |
+| every push to `main` / PR | `selftest` + `rust-check` (auto CI — builds and verifies on every new commit) | ~2 min |
+| **Actions → Build & Release → Run workflow** (option A) | full release — every installer + Flatpak + `SHA256SUMS`, attached to a **draft** GitHub Release | 10–25 min |
 
-**Artifacts per release:**
+**When you trigger a release you must fill in two fields:**
 
-| Runner | Files you get |
+| Input | Required? | What it does |
+|---|---|---|
+| `release_version` | **yes** | e.g. `2.0.3`. Creates the tag + draft release `v2.0.3`, and stamps this version into the app so every installer reports it (via `tools/sync_version.py`). |
+| `release_notes` | no | The body of the release (markdown). Leave blank for a short default. |
+
+**Artifacts per release** — the builder jobs run **in parallel**:
+
+| Runner | Bundle(s) you get |
 |---|---|
-| `ubuntu-22.04` | `.AppImage` · `.deb` · `.rpm` |
+| `ubuntu-22.04` (job ×3) | `.deb` · `.rpm` · `.AppImage` — **three separate parallel jobs** |
 | `ubuntu-latest` (container) | `OPTIBubble_vX.Y.Z_x86_64.flatpak` |
 | `windows-latest` | `.msi` · NSIS `-setup.exe` |
-| `macos-latest` ×2 | `.aarch64.dmg` (M-series) · `.x64.dmg` (Intel) |
+| `macos-latest` (job ×2) | `.aarch64.dmg` (M-series) · `.x64.dmg` (Intel) |
+| — (after the above finish) | `SHA256SUMS` checksum file |
 
-**Cutting a release — the exact steps:**
+**Cutting a release — the steps:**
 
-```bash
-# 0 · (optional) run the self-test locally so you only ever tag a green build
-python selftest.py
+1. (Optional) run the self-test locally so you only trigger a green build:
+   `python selftest.py`
+2. Go to the **Actions** tab → **Build & Release** → **Run workflow**.
+3. Enter `release_version` (e.g. `2.0.3`) and, if you like, `release_notes`. **Run workflow.**
+4. Watch it build. `prepare-release` creates the draft `v2.0.3` first, then the
+   installer/Flatpak jobs run in parallel and upload to it. The `checksums` job
+   runs last to attach `SHA256SUMS`. (You do **not** run `git tag` yourself.)
+5. Open **Releases** → the draft **“OPTIBubble v2.0.3”** has every installer +
+   the checksum file. Review/edit the notes, then press **Publish**.
 
-# 1 · bump the version everywhere from ONE source of truth:
-python tools/sync_version.py 2.0.0
-
-# 2 · stage, commit and tag (one clean release commit, then a tag on it)
-git add -A
-git commit -m "release: v2.0.0 — three-pass OMR anchors, stroke auto-heal, scanner torch/switch, guide"
-
-git tag v2.0.0
-
-# 3 · push the branch AND the tag — the tag is what triggers the release build
-git push origin main --tags
-```
-
-3. Watch the build at **Actions → Build & Release** (green ✓ per platform).
-   The `rust-check` job now freezes the Python engine *before* `cargo check`,
-   because the Tauri build script resolves the `engine/*` resource glob at
-   build time — missing it was the previous build-killer. (`src-tauri/engine/.gitkeep`
-   is committed so the glob also resolves on a fresh clone / local `cargo build`.)
-4. Open **Releases** → the draft **“OPTIBubble v2.0.0”** now has every
-   installer attached. Edit the notes if you like, then press **Publish**.
-
-> The release is created as a *draft* on purpose — nothing is public until you
-> publish it. No secrets or signing keys are required for unsigned builds.
-> To sign later: Windows → `TAURI_SIGNING_PRIVATE_KEY` secrets (Tauri docs);
-> macOS notarization → `APPLE_CERTIFICATE`/`APPLE_ID` secrets; Flathub signs
-> Flatpaks for you. See [README → Download & install](#) for the checksum
-> verification users should do.
+> The release is a **draft** on purpose — nothing is public until you publish it.
+> No secrets or signing keys are required for unsigned builds. To sign later:
+> Windows → `TAURI_SIGNING_PRIVATE_KEY` secrets (Tauri docs); macOS notarization →
+> `APPLE_CERTIFICATE`/`APPLE_ID` secrets; Flathub signs Flatpaks for you. The
+> `SHA256SUMS` file is what users run `sha256sum -c` against (README → Download).
+>
+> **Caching:** the workflow reuses things that haven't changed — npm deps, pip
+> packages, the `src-tauri` Cargo build, the frozen Python engine, and the
+> Flatpak builder state. Rebuilding the same code twice is much faster than the
+> first time; changing the engine code or frontend invalidates those caches.
 
 ## 6 · The release workflow (`main.yml`)
 
-# --- workflow (kept in sync with .github/workflows/main.yml) ---
-```yaml
-# ============================================================================
-# OPTIBubble — main.yml
-# One workflow: CI on every push/PR, release builds on tags (v*) or manual run.
-#
-#   push / pull_request   → job "selftest" + "rust-check" (fast, ~2 min)
-#   tag v* / dispatch     → selftest + installers for every platform:
-#                           Windows MSI+NSIS · macOS dmg (Apple Silicon & Intel)
-#                           Linux AppImage + deb + RPM · Flatpak bundle
-#
-# IMPORTANT — why rust-check freezes the engine:
-#   Tauri's build script resolves the `engine/*` resource glob from tauri.conf
-#   DURING `cargo check`. If `src-tauri/engine/` is empty the build fails with
-#   "glob pattern engine/* path not found or didn't match any files". CI never
-#   produced those files, so rust-check failed. We freeze the engine first here
-#   and also commit a `.gitkeep` in `src-tauri/engine/` so the glob resolves
-#   even on a fresh clone (and for local `cargo build`).
-#
-# No secrets required. Release is created as a DRAFT — review and publish at
-# github.com/<you>/OPTIBubble/releases (see setup.md → "Cutting a release").
-# ============================================================================
-name: Build & Release
+> The authoritative file is **`.github/workflows/main.yml`** — keep the two in
+> sync by copying the file rather than the notes below. A summary of the jobs:
 
-on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-  workflow_dispatch:
+| Job | Runs when | Purpose |
+|---|---|---|
+| `selftest` | push/PR **and** dispatch | installs deps, builds the React SPA, runs `python selftest.py` (the release gate) |
+| `rust-check` | push/PR **and** dispatch | freezes the Python engine, then `cargo check` — proves the Tauri shell compiles |
+| `prepare-release` | dispatch only | creates the draft release + tag `v<version>` (single point, avoids upload races) |
+| `tauri` (matrix) | dispatch only | builds every installer **in parallel**: Linux `.deb`/`.rpm`/`.AppImage`, macOS dmg ×2, Windows MSI+NSIS |
+| `flatpak` | dispatch only | builds the offline Flatpak bundle (vendored wheels) and attaches it |
+| `checksums` | dispatch only | downloads all assets and attaches `SHA256SUMS` |
 
-permissions:
-  contents: write
+Key points why it's robust:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  # ------------------------------------------------------------------- CI ---
-  selftest:
-    name: Self-test (end-to-end)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build the React SPA
-        run: cd frontend && npm ci --no-audit --no-fund && npm run build
-
-      - name: Install engine dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run the end-to-end self-test
-        run: python selftest.py
-
-  # ------------------------------------------------ Rust shell compiles? ---
-  rust-check:
-    name: Rust shell (cargo check)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Linux system dependencies (WebKit)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file pkg-config
-
-      # The `engine/*` bundle glob must resolve for the Tauri build script.
-      - name: Freeze the Python engine (single self-contained binary)
-        run: |
-          pip install -r requirements.txt pyinstaller
-          pyinstaller optibubble.spec --distpath src-tauri/engine \
-            --workpath build-engine --noconfirm
-
-      - name: cargo check (src-tauri)
-        run: cargo check --manifest-path src-tauri/Cargo.toml
-
-  # ------------------------------------------------- release: native shells -
-  tauri:
-    name: ${{ matrix.platform }} installers
-    needs: selftest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux: AppImage + deb + RPM from one build
-          - platform: ubuntu-22.04
-            args: ""
-          # macOS: Apple Silicon + Intel
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-          # Windows: MSI + NSIS setup
-          - platform: windows-latest
-            args: ""
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Linux system dependencies (WebKit)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev build-essential curl wget file
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      # The React SPA must be built BEFORE freezing — optibubble/web/dist is a
-      # build artifact, not committed, so without this step every installer
-      # ships only the legacy app.html/scan.html and not the React UI.
-      - name: Build the React SPA
-        run: cd frontend && npm ci --no-audit --no-fund && npm run build
-
-      # The `engine/*` bundle glob needs the frozen binary in place before the
-      # Tauri build script resolves it (same reason as rust-check).
-      - name: Freeze the Python engine (single self-contained binary)
-        run: |
-          pip install -r requirements.txt pyinstaller
-          pyinstaller optibubble.spec --distpath src-tauri/engine \
-            --workpath build-engine --noconfirm
-
-      - name: Build bundles & attach to the draft release
-        uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: .
-          tagName: v__VERSION__
-          releaseName: "OPTIBubble v__VERSION__"
-          releaseBody: "Installers for Windows, macOS and Linux (AppImage/deb/RPM). The Flatpak bundle is attached by the flatpak job. Each installer is fully self-contained (Python engine frozen with PyInstaller) — end users need nothing installed. Verify downloads against the SHA256SUMS file described in the README."
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
-
-  # ----------------------------------------------------- release: Flatpak ---
-  flatpak:
-    name: Flatpak bundle
-    needs: selftest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    container:
-      image: bilelmoussaoui/flatpak-github-actions:freedesktop-24.08
-      options: --privileged
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Flatpak
-        uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v7
-        with:
-          bundle: OPTIBubble_${{ github.ref_name || 'dev' }}_x86_64.flatpak
-          manifest-path: packaging/flatpak/com.optibubble.app.yml
-          cache-key: flatpak-builder-${{ github.sha }}
-
-      - name: Attach bundle to the release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          files: OPTIBubble_*_x86_64.flatpak
-```
+- The **React SPA is built before the engine is frozen** (`optibubble/web/dist`
+  is a build artifact, not committed), so installers ship the real React UI.
+- The **Python engine is frozen before `cargo check`/`tauri build`**, because the
+  Tauri build script resolves the `engine/*` resource glob at build time —
+  missing it was the previous build-killer. (`src-tauri/engine/.gitkeep` is
+  committed so the glob resolves on a fresh clone / local `cargo build`.)
+- The **frozen engine + Cargo build are cached** by source hash, so an unchanged
+  engine is restored instead of rebuilt, and a version bump alone doesn't
+  recompile all of Rust.
+- The Linux `.deb`/`.rpm`/`.AppImage` are three **separate parallel jobs** so
+  they finish at the same time instead of one-after-another.
 
 ## 7 · Flatpak & Flathub details
 
 The manifest at `packaging/flatpak/com.optibubble.app.yml` packages the
-**Python app directly** (no Tauri required) on the Freedesktop 24.08 runtime:
-`pip install` of `requirements.txt` into `/app`, the `optibubble/` package
-with bundled fonts, a launcher wrapper (`optibubble.sh`) that keeps data
-inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
+**Python app from source** (no Tauri required) on the Freedesktop 24.08 runtime.
+It is **fully offline**: every runtime dependency is **vendored as a wheel**
+(`packaging/flatpak/python-deps.yml`) that flatpak-builder downloads at prep time
+and installs with `--no-index` inside the sandbox — there is no `pip install` /
+`npm install` network pull during the build. The app itself runs from `python3
+main.py` (no frozen PyInstaller binary), which avoids the `/tmp`/`_MEIPASS`
+unpack problem against an immutable OSTree `/app`. The launcher (`optibubble.sh`)
+writes data to the sandbox's persistent `$XDG_DATA_HOME` (granted via
+`--filesystem=xdg-data`), plus the desktop file, icons and AppStream metainfo.
+
+**Regenerating the vendored dependencies** (after any `requirements.txt` change):
+
+```sh
+python3 tools/flatpak_deps.py      # rewrites packaging/flatpak/python-deps.yml
+```
+
+See `packaging/flatpak/README.md` for the full design rationale.
 
 **Publishing to Flathub** (optional, gives automatic distribution + updates):
 
 1. Fork [flathub/flathub](https://github.com/flathub/flathub).
 2. Copy `packaging/flatpak/com.optibubble.app.yml` into `apps/` and change the
-   `dir` source to a **tagged tarball URL** (Flathub builds must not reference
-   mutable branches):
+   app `dir` source to a **tagged tarball URL** (Flathub builds must not
+   reference mutable branches). The dependency wheels in `python-deps.yml`
+   stay as-is — they are `type: file` sources fetched at prep time:
    ```yaml
    sources:
      - type: archive
@@ -531,7 +366,9 @@ inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
       the self-test fails CI if they ever drift)
 - [ ] `cd src-tauri && cargo update -p optibubble`
 - [ ] new `<release>` entry in `packaging/flatpak/com.optibubble.app.metainfo.xml`
-- [ ] commit → `git tag vX.Y.Z` → `git push --tags` → publish the draft release
+- [ ] commit & push the branch, then trigger a release from **Actions →
+      Build & Release → Run workflow** (no `git tag` needed — the workflow
+      creates the `vX.Y.Z` tag and draft release for you)
 
 ## 9 · Troubleshooting
 
@@ -539,7 +376,7 @@ inside the sandbox home, plus the desktop file, icons and AppStream metainfo.
 |---|---|
 | `cargo tauri` not found | `cargo install tauri-cli --version "^2"`; ensure `~/.cargo/bin` is on `PATH` |
 | Linux: `webkit2gtk-4.1 not found` | install the §4.3 packages (CI runners already do) |
-| Actions release has no artifacts | check the *Actions* log — the release jobs only run on `v*` tags or manual dispatch |
+| Actions release has no artifacts | the release jobs only run on a **manual** dispatch — go to **Actions → Build & Release → Run workflow** and fill in the version (you must have pushed your commit first) |
 | Flatpak job fails | it needs the privileged container (already configured); try deleting the cache key and re-running |
 | Tauri window opens to an error page | the Python engine failed to start — run `python main.py` once to see why |
 | Port 8090 busy | The default is 8090 (not 5000, which macOS AirPlay Receiver occupies) — `python main.py --port 8091` (HTTPS bridge: `https_port` in Settings) |

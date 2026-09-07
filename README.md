@@ -340,9 +340,10 @@ Prefer a real desktop window with its own icon, taskbar entry and installers?
 The repo ships a **Tauri 2** shell in `src-tauri/` that wraps the exact same UI,
 One GitHub Actions workflow (`.github/workflows/main.yml`) **freezes the Python
 engine into a self-contained binary with PyInstaller** and produces fully
-self-contained installers on every `v*` tag — **Windows MSI/NSIS, macOS dmg
-(Intel + Apple Silicon), Linux AppImage, deb, RPM and a Flatpak**. End users
-install and run — no Python, no pip, no setup:
+self-contained installers on demand — **Windows MSI/NSIS, macOS dmg (Intel +
+Apple Silicon), Linux deb, RPM, AppImage and a Flatpak**. You trigger it
+manually from the Actions tab (no git tag needed) by typing the release version
+and optional notes. End users install and run — no Python, no pip, no setup:
 
 ```bash
 cargo install tauri-cli --version "^2"
@@ -623,7 +624,7 @@ OPTIBubble/
 ├── setup.md                 # setup · local builds · GitHub · Actions releases
 ├── make_assets.py           # regenerates logo/brand assets from bundled fonts
 ├── requirements.txt
-├── .github/workflows/main.yml  # CI on push/PR + full release matrix on tags
+├── .github/workflows/main.yml  # CI on push/PR + manual release matrix (no tag)
 ├── packaging/flatpak/       # Flatpak manifest · desktop file · metainfo
 ├── tools/otf2ttf.py         # wordmark OTF→TTF converter (ReportLab embeds)
 ├── src-tauri/               # Tauri 2 native shell (optional build)
