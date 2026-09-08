@@ -295,7 +295,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     container:
-      image: flatpak/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flatpak/flatpak-github-actions:freedesktop-24.08
       options: --privileged
     steps:
       - uses: actions/checkout@v4
