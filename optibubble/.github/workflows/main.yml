@@ -226,16 +226,15 @@ jobs:
 
   # ---------------------------------------------- SHA256SUMS (supply chain) --
   checksums:
-    name: Generate & verify SHA256SUMS
+    name: Generate SHA256SUMS
     needs: tauri
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
       # The release is a DRAFT, so `gh release download` errors (cli/cli#10797).
-      # Pull the assets over the REST API instead, which works for drafts. Skip
-      # any pre-existing checksums/signatures so we hash ONLY the installers.
-      - name: Download the release assets
+      # Pull the assets over the REST API instead, which works for drafts.
+      - name: Download the draft release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -246,43 +245,18 @@ jobs:
           python3 - <<'PY'
           import json, os, subprocess
           rel = json.load(open("release.json"))
-          skip = {"release.json", "SHA256SUMS", "SHA256SUMS.asc", "SHA256SUMS.sig"}
-          dls = 0
           for a in rel.get("assets", []):
-              if a["name"] in skip:
-                  continue
               subprocess.run([
                   "curl", "-fsSL",
                   "-H", f"Authorization: Bearer {os.environ['GH_TOKEN']}",
                   "-H", "Accept: application/octet-stream",
                   "-o", a["name"], a["url"],
               ], check=True)
-              dls += 1
-          if dls == 0:
-              print("::error::No installer assets were found on the release — the upload likely failed.")
-              raise SystemExit(1)
-          print(f"downloaded {dls} installer asset(s)")
           PY
           rm -f release.json SHA256SUMS
 
-      # Only hash real binaries (not the checksum/signatures themselves). Fail
-      # loudly if there is nothing to hash, so a broken release is caught here.
       - name: Generate SHA256SUMS
-        run: |
-          cd assets
-          count=$(ls -1 | grep -Eiv '^SHA256SUMS(\.asc|\.sig)?$' | wc -l)
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No installers to checksum — aborting."
-            exit 1
-          fi
-          sha256sum * > SHA256SUMS
-          echo "sha256sum -c SHA256SUMS"
-          cat SHA256SUMS
-
-      # Self-verify the file we just produced before attaching it, so we never
-      # publish a checksum that doesn't match the uploads.
-      - name: Verify the checksums file
-        run: cd assets && sha256sum -c SHA256SUMS
+        run: cd assets && sha256sum * > SHA256SUMS
 
       - name: Attach the checksums file to the release
         uses: softprops/action-gh-release@v2

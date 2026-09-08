@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPTIBubble</title>
+<link rel="icon" href="/assets/icon-128.png">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="app">
+  <div class="brand">
+    <img class="wordmark" src="/assets/logo-wordmark-white.png" alt="OPTIBubble" id="brandLogo">
+    <img class="mini-icon" src="/assets/icon-128.png" alt="OPTIBubble">
+  </div>
+
+  <div class="topbar" id="topbar">
+    <span class="toplabel">Test</span>
+    <span class="testchip" id="testChipTop"></span>
+    <div class="tabs" id="tabs"></div>
+    <div class="spacer"></div>
+  </div>
+
+  <nav class="nav">
+    <div class="navlabel">System</div>
+    <a class="item" data-page="dashboard"><i data-icon="home" data-size="15" class="ic"></i><span>Dashboard</span></a>
+    <a class="item" data-page="settings"><i data-icon="settings" data-size="15" class="ic"></i><span>Settings</span></a>
+    <a class="item" data-page="help"><i data-icon="help" data-size="15" class="ic"></i><span>Help &amp; FAQ</span></a>
+    <div class="foot">
+      <span class="pill off" id="srvPill">server offline</span>
+      <div class="footrow">
+        <button class="iconbtn" id="themeBtn" title="Toggle theme">◐</button>
+        <span class="muted">v<span id="ver"></span> · local only</span>
+      </div>
+      <span class="mono" id="dataDir" style="word-break:break-all"></span>
+    </div>
+  </nav>
+
+  <main class="main">
+    <!-- ============================ DASHBOARD ============================ -->
+    <section class="page" id="page-dashboard">
+      <div class="hero">
+        <div class="art">
+          <span class="badge info">local OMR · mobile bridge</span>
+          <h1>Grade a whole class from their phones.</h1>
+          <p>Generate the answer sheet, let students photograph it with any phone
+             browser over your Wi-Fi, and OpenCV grades it here — in milliseconds.
+             Ambiguous marks wait for you in the review queue; everything exports to CSV.</p>
+          <div class="steps">
+            <div class="step" data-goto="setup"><i>1</i><b>Create a test</b><span>questions, options, key</span></div>
+            <div class="step" data-goto="serve"><i>2</i><b>Print &amp; serve</b><span>QR magic link</span></div>
+            <div class="step" data-goto="review"><i>3</i><b>Review &amp; export</b><span>crops → CSV</span></div>
+          </div>
+        </div>
+        <div class="card" id="currentTestCard">
+          <h3><i data-icon="pin"></i>Active test</h3>
+          <p class="sub" id="currentTestSub">No test yet — create one to begin.</p>
+          <div id="currentTestBody" class="muted" style="font-size:13px">—</div>
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn sm" data-goto="serve">Scan &amp; Serve →</button>
+            <a class="btn sm ghost" href="/api/sheet.pdf" target="_blank" id="pdfLink" style="display:none">Open sheet PDF</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><b id="stReceived" style="color:var(--accent2)">0</b><span>sheets received</span></div>
+        <div class="stat"><b id="stGraded" style="color:var(--ok2)">0</b><span>auto-graded</span></div>
+        <div class="stat"><b id="stPending" style="color:var(--warn2)">0</b><span>awaiting review</span></div>
+        <div class="stat"><b id="stExported" style="color:#C4B5FD">0</b><span>exported to CSV</span></div>
+      </div>
+
+      <div class="card">
+        <div class="pagetop">
+          <h3>Your tests</h3>
+          <span class="badge info" id="testsCount">0</span>
+          <div class="spacer"></div>
+          <button class="btn sm ghost" id="newTestBtn"><i data-icon="plus"></i>New test</button>
+        </div>
+        <p class="sub">Opening a test switches Scan &amp; Serve, Review and
+               Results to its own data — every test keeps its own sheets,
+               queue and CSV.</p>
+        <div id="recentTests"><div class="spin"></div></div>
+      </div>
+    </section>
+
+    <!-- ============================ SETUP ============================ -->
+    <section class="page" id="page-setup">
+      <div class="setup setup3">
+        <div class="card">
+          <h3>Test definition</h3>
+          <p class="sub">The sheet layout, QR session and geometry are generated automatically.</p>
+          <div class="field"><label>Test title *</label>
+            <input type="text" id="fTitle" placeholder="e.g. Physics Midterm — Form A" maxlength="80"></div>
+          <div class="field"><label>Subject</label>
+            <input type="text" id="fSubject" placeholder="e.g. Physics" maxlength="80"></div>
+          <div class="field"><label>Questions (2–102)</label>
+            <input type="number" id="fQuestions" min="2" max="102" value="20">
+            <span class="hint">1–34 → one column · 35–68 → two · 69–102 → three</span></div>
+          <div class="field"><label>Options per question</label>
+            <div class="seg" id="fOptions">
+              <button data-v="2">2 · A-B</button><button data-v="3">3 · A-C</button>
+              <button data-v="4" class="active">4 · A-D</button><button data-v="5">5 · A-E</button>
+            </div></div>
+          <div class="field"><label>Student-ID digits</label>
+            <div class="seg" id="fDigits">
+              <button data-v="4">4</button><button data-v="6">6</button>
+              <button data-v="7" class="active">7</button><button data-v="0">none</button>
+            </div></div>
+          <div class="field"><label>Paper size</label>
+            <div class="seg" id="fPaper">
+              <button data-v="a4" class="active">A4</button><button data-v="letter">Letter</button>
+            </div></div>
+          <button class="btn ok" id="createBtn" style="width:100%; margin-top:4px">Create test &amp; generate sheet</button>
+          <p class="hint" id="setupErr" style="color:var(--err2); margin-top:9px; display:none"></p>
+        </div>
+
+        <div class="card">
+<h3>Answer key <span class="badge info" style="vertical-align:2px">optional</span></h3>
+          <p class="sub">Click a cell to cycle options — or leave it empty and a
+             balanced key is generated automatically (editable anytime).</p>
+          <div class="keytools">
+            <button class="btn sm ghost" id="keyRandom">Random</button>
+            <button class="btn sm ghost" id="keyClear">Clear</button>
+            <input type="text" id="keyPaste" placeholder="paste: 1:A 2:C … or ABCD…" style="flex:1; min-width:170px">
+            <button class="btn sm ghost" id="keyLoad">Load</button>
+          </div>
+          <div class="keygrid" id="keyGrid"></div>
+        </div>
+
+        <div>
+          <div class="card" style="margin-bottom:14px">
+            <h3>Sheet design</h3>
+            <p class="sub">Edits stay inside the header — the answer area is never
+               touched; text auto-shrinks instead of overlapping.</p>
+            <div class="field"><label>Sheet instructions</label>
+              <textarea id="fInstructions" rows="3" maxlength="240"
+                placeholder="Leave empty for the default helper text"></textarea>
+              <span class="hint">Printed under the title · ≤240 chars · 3 lines</span></div>
+            <div class="field"><label>Header text size — <span id="fHeaderScaleVal">100%</span></label>
+              <input type="range" id="fHeaderScale" min="0.8" max="1.4" step="0.05" value="1"></div>
+            <div class="field"><label>Wordmark side</label>
+              <div class="seg" id="fLogo">
+                <button data-v="left" class="active">◧ Left</button>
+                <button data-v="right">Right ◨</button>
+              </div>
+              <span class="hint">Logo prints in brand blue #2e5a99.</span></div>
+            <div class="field"><label>Handwritten write-in fields</label>
+              <input type="text" id="fWriteIn" value="Name, Class, Date" maxlength="100">
+              <span class="hint">Comma-separated lines students fill by hand —
+                the scanner ignores them. Leave empty for none (max 6).</span></div>
+          </div>
+          <div class="card" style="margin-bottom:14px">
+            <h3>Scoring</h3>
+            <p class="sub">Points per question and partial-credit policy.</p>
+            <div class="field"><label>Default points per question</label>
+              <input type="number" id="fDefaultPts" min="0.1" max="100" step="0.5" value="1"></div>
+            <div class="field"><label>Critical questions worth more</label>
+              <input type="text" id="fWeights" placeholder="e.g. 5:2, 9-12:3" spellcheck="false">
+              <span class="hint">Ranges and single questions · Q#:points.</span></div>
+            <div class="field"><label>Partial credit for double-marks containing the key</label>
+              <div class="seg" id="fPartial">
+                <button data-v="0" class="active">Off</button>
+                <button data-v="0.25">¼</button>
+                <button data-v="0.5">½</button>
+                <button data-v="1">Full</button>
+              </div>
+              <span class="hint">Off sends double-marks to review; credit
+                auto-awards the fraction without review.</span></div>
+          </div>
+          <div class="card">
+            <h3>Preview</h3>
+            <p class="sub">Rendered live from the generated sheet — appears after
+               you create the test.</p>
+            <div class="previewbox" id="previewBox" style="display:none">
+              <img id="previewImg" alt="Sheet preview" style="cursor:zoom-in">
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ SERVE ============================ -->
+    <section class="page" id="page-serve">
+      <div class="serve">
+        <div class="card">
+          <h3>Student scan</h3>
+          <p class="sub" id="qrSub">—</p>
+          <div class="qrgrid">
+            <div class="qrblock" id="qrBlockA">
+              <div class="steptag">Step 1 · once</div>
+              <div class="qrframe mark"><img id="qrCert" alt="Install certificate"></div>
+              <b>Enable the live camera</b>
+              <span class="muted">one-time certificate install</span>
+            </div>
+            <div class="qrblock" id="qrBlockB">
+              <div class="steptag ok" id="qrTagB">Step 2 · every class</div>
+              <div class="qrframe mark"><img id="qrImg" alt="Scan to start"></div>
+              <b id="qrBLabel">Open the scanner</b>
+              <span class="muted" id="qrBHint">—</span>
+            </div>
+          </div>
+          <div class="serve-status" id="serveStatus"></div>
+          <div class="urlrow" style="margin-top:12px">
+            <input type="text" id="srvUrl" class="mono" readonly value="—">
+            <button class="btn sm ghost" id="copyBtn">Copy</button>
+          </div>
+          <select id="ipSel" style="max-width:280px"></select>
+          <button class="btn" id="srvBtn" style="width:100%; margin-top:4px">▶&nbsp; Start server</button>
+          <div style="display:flex; gap:8px; width:100%">
+            <a class="btn ghost sm" href="/api/sheet.pdf" target="_blank" rel="noopener" style="text-decoration:none; flex:1"><i data-icon="printer"></i>Sheet PDF · 100%</a>
+            <a class="btn ghost sm" href="/api/key.pdf" target="_blank" rel="noopener" id="keyPdfBtn" style="text-decoration:none; flex:1"><i data-icon="key"></i>Answer key</a>
+          </div>
+        </div>
+        <div class="card" id="keyCard" style="display:none">
+          <h3>Answer key</h3>
+          <p class="sub" id="keySub">—</p>
+          <div style="display:flex; gap:8px">
+            <input type="text" id="keyEdit" class="mono" placeholder="e.g. 1:A 2:C 3:B …  or  ABCDABCD…"
+                   style="flex:1">
+            <button class="btn sm" id="keySave">Save</button>
+          </div>
+          <span class="hint">You can print and scan now — grading scores the
+            questions that already have a key.</span>
+        </div>
+        <div class="card" id="deskCamCard">
+          <h3><i data-icon="camera"></i>Desktop camera <span class="badge info">USB doc cam</span></h3>
+          <p class="sub">Plug a USB document camera or webcam into this PC —
+             no phone needed. Lay the sheet flat and click grade.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <select id="camSel" style="max-width:170px"><option value="0">Camera 0</option></select>
+            <button class="btn sm ghost" id="camRefresh"><i data-icon="refresh"></i>Detect</button>
+            <button class="btn sm" id="camStart"><i data-icon="camera"></i>Start</button>
+            <button class="btn sm ghost" id="camStop" style="display:none">Stop</button>
+          </div>
+          <div id="camPreviewWrap" style="display:none; margin-top:10px">
+            <img id="camPreview" alt="camera frame" style="width:100%;
+              border-radius:5px; border:1px solid var(--hair2); background:#000">
+            <button class="btn ok" id="camGrade" style="width:100%; margin-top:8px">
+              <i data-icon="check"></i>Capture &amp; grade this sheet</button>
+            <span class="hint">Hold the sheet still — grading takes the current frame.</span>
+          </div>
+        </div>
+        <div class="card" id="monitorCard">
+          <h3><i data-icon="eye"></i>Phone mirror <span class="badge info">WebRTC</span></h3>
+          <p class="sub">Students' phones can mirror their live viewfinder here —
+             check framing on the big screen while they scan.</p>
+          <button class="btn sm" id="mirrorBtn"><i data-icon="scan"></i>Start monitoring</button>
+          <video id="mirrorVideo" autoplay muted playsinline style="width:100%;
+            margin-top:10px; border-radius:5px; background:#000; display:none"></video>
+          <span class="hint" id="mirrorHint">Then on the phone camera view, tap the mirror button.</span>
+        </div>
+        <div class="card">
+          <h3>Live activity</h3>
+          <p class="sub">Photos arrive over your Wi-Fi and are graded locally in &lt;150 ms.</p>
+          <div class="log" id="logBox"><span class="in">waiting for the first sheet…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ REVIEW ============================ -->
+    <section class="page" id="page-review">
+      <div class="review">
+        <div class="card">
+          <h3>Flagged sheets <span class="badge warn" id="reviewCount">0</span></h3>
+          <p class="sub">Blank · double-marked · faint — one human look, then export.</p>
+          <div class="rlist" id="reviewList"></div>
+        </div>
+        <div class="card" id="reviewDetail">
+          <h3>Nothing flagged — clean sailing</h3>
+          <p class="sub">Ambiguous sheets will appear here automatically.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ RESULTS ============================ -->
+    <section class="page" id="page-results">
+      <div class="card" id="analyticsCard" style="margin-bottom:14px">
+        <div class="restop">
+          <h3>Analytics</h3>
+          <span class="badge ok" id="kr20Badge">—</span>
+          <span class="muted" id="analyticsMeta" style="font-size:11.5px"></span>
+        </div>
+        <div id="analyticsBody" class="muted" style="font-size:12.5px">
+          Grade a few sheets to see reliability statistics.</div>
+      </div>
+      <div class="card">
+        <div class="restop">
+          <h3>Results</h3>
+          <span class="badge ok" id="resStat">—</span>
+          <div class="spacer"></div>
+          <input type="text" id="resFilter" placeholder="filter by ID…" style="max-width:150px">
+          <a class="btn sm ghost" href="/api/results/export.csv" id="exportBtn" style="text-decoration:none">Export CSV copy</a>
+          <a class="btn sm ghost" href="#" id="revealBtn" style="text-decoration:none">Open data folder</a>
+        </div>
+        <div id="resHisto"></div>
+        <div style="overflow-x:auto">
+          <table class="tbl">
+            <thead><tr>
+              <th>#</th><th>Time</th><th>Student ID</th><th>Score</th><th>%</th>
+              <th>Confidence</th><th>Status</th>
+            </tr></thead>
+            <tbody id="resBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ SETTINGS ============================ -->
+    <section class="page" id="page-settings">
+      <div class="grid" style="grid-template-columns:1fr 1fr; align-items:start" id="settingsGrid">
+        <div class="card"><h3>OMR engine</h3>
+          <p class="sub">Fine-tune the computer-vision grading model.</p><div id="setEngine"></div></div>
+        <div>
+          <div class="card" style="margin-bottom:16px"><h3>Camera &amp; upload</h3>
+            <p class="sub">Phone-side capture quality.</p><div id="setCamera"></div></div>
+          <div class="card" style="margin-bottom:16px"><h3>Local server</h3>
+            <p class="sub">Restart the server after changing these.</p><div id="setServer"></div></div>
+          <div class="card" style="margin-bottom:16px">
+            <h3><i data-icon="lock"></i>Live camera (HTTPS)</h3>
+            <p class="sub">Browsers only allow the in-page camera on HTTPS.
+               Recommended: <b>Trusted</b> — students need zero setup, just one
+               QR scan. Alternative: <b>Offline</b> — works without internet,
+               students install a certificate once.</p>
+            <div class="field"><label>Mode</label>
+              <div class="seg" id="httpsMode">
+                <button data-v="letsencrypt" class="active">Trusted · recommended</button>
+                <button data-v="local">Offline (local CA)</button>
+              </div></div>
+
+            <div id="trustedPanel">
+              <div class="https-banner" id="httpsBanner">Checking…</div>
+
+              <div id="trustedFields">
+                <div class="field"><label>Your free DuckDNS domain</label>
+                  <input type="text" id="acmeDomain" placeholder="myclass.duckdns.org"
+                         spellcheck="false">
+                  <span class="hint">Create one free at
+                    <a href="https://www.duckdns.org" target="_blank" rel="noopener">duckdns.org</a>
+                    — set its IP to this PC's address shown below.</span></div>
+                <div class="field"><label>DuckDNS token</label>
+                  <input type="text" id="duckToken" placeholder="paste your token"
+                         spellcheck="false"></div>
+                <div class="field"><label>Email (expiry notices)</label>
+                  <input type="text" id="acmeEmail" placeholder="you@school.edu"
+                         spellcheck="false"></div>
+                <button class="btn" id="provisionBtn" style="width:100%">
+                  <i data-icon="zap"></i>Set up the live camera</button>
+                <p class="hint" style="text-align:center">Takes 2–3 minutes, once.
+                  This PC needs internet only during setup.</p>
+              </div>
+
+              <ol class="prov-steps" id="provSteps"></ol>
+              <div class="prov-hint" id="provHint"></div>
+            </div>
+
+            <p class="sub" style="margin-top:12px" id="localModeNote">
+              Offline mode is always available as a fallback — students scan
+              code A once (Android: use Firefox), and the native-camera upload
+              works everywhere regardless.</p>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <h3><i data-icon="server"></i>System</h3>
+            <p class="sub">Version, environment and diagnostics.</p>
+            <div class="sysgrid" id="sysGrid">
+              <div class="systile"><span>loading…</span></div>
+            </div>
+            <div class="setgroup">Network</div>
+            <div class="sysgrid" id="sysNet"></div>
+          </div>
+          <div class="card"><h3>Maintenance</h3>
+            <p class="sub" id="setDataDir">data folder</p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap">
+              <button class="btn sm ghost" id="resetSettings">Reset to defaults</button>
+              <button class="btn sm ghost" id="runSelftest"><i data-icon="check"></i>Run self-test</button>
+              <button class="btn sm ghost" id="restoreBtn"><i data-icon="download"></i>Restore archive</button>
+            </div>
+            <input type="file" id="restoreFile" accept=".optibubble,.zip" style="display:none">
+            <pre id="selftestOut" class="mono" style="display:none;margin-top:10px;
+  background:var(--bg0);border:1px solid var(--hair);border-radius:4px;
+  padding:10px;font-size:10.5px;max-height:220px;overflow:auto;white-space:pre-wrap"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ HELP ============================ -->
+    <section class="page" id="page-help">
+      <div class="card" style="margin-bottom:14px">
+        <h3><i data-icon="info"></i>About OPTIBubble</h3>
+        <p class="sub">Local computer-vision OMR grading with a mobile-bridge scanner —
+           v<span class="ver"></span>. Sheets are generated, photographed on any phone over
+           Wi-Fi and graded with OpenCV on this machine. Nothing leaves your network.</p>
+      </div>
+      <div id="faqList"></div>
+    </section>
+  </main>
+</div>
+<div id="toasts"></div>
+<script src="/assets/icons.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>
