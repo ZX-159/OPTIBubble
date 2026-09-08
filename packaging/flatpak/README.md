@@ -23,9 +23,12 @@ network *is* available) and drops them into `wheels/`; the `python3-deps` module
 then installs them with `--no-index`:
 
 ```sh
-python3 -m pip install --no-index --no-deps --prefix=/app wheels/*.whl
+python3 -m pip install --no-index --no-deps --target=/app/optibubble/lib wheels/*.whl
 ```
 
+`--target` (rather than `--prefix`) installs every package flat into
+`/app/optibubble/lib`, so `PYTHONPATH=/app/optibubble/lib` is **version-agnostic** —
+it stays correct no matter which Python minor the freedesktop 24.08 runtime ships.
 No `pip install`/`npm install` happens during the compile. Re-run the generator
 after any `requirements.txt` change:
 
@@ -53,14 +56,26 @@ directory (`$XDG_DATA_HOME/OPTIBubbleData`, which the manifest grants via
 > locations the binary writes. Source-run is preferred because it is smaller and
 > has no sandbox/runtime pitfalls.
 
+### 3. WebKitGTK `EGL_BAD_PARAMETER` right after launch
+
+Inside the sandbox (or on a GPU-less machine), the webview process can abort with
+`Could not create default EGL display: EGL_BAD_PARAMETER`. The manifest sets
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` and `WEBKIT_DISABLE_COMPOSITING_MODE=1` via
+`finish-args --env`, and the launcher exports them too, so the UI renders through
+the safe/software path. The native Tauri shell (`src-tauri/src/main.rs`) sets the
+same two variables before the webview initialises, which fixes the same failure in
+the AppImage/dev runs.
+
 ## Files
 
 - `com.optibubble.app.yml` — the manifest. Two modules: `python3-deps`
-  (vendored wheels, installed offline) and `optibubble` (the app + desktop
-  integration). `type: dir path: ../..` snapshots the repo, restricted by `files`.
+  (vendored wheels, installed offline via `--target`, version-agnostic) and
+  `optibubble` (the app + desktop integration). `type: dir path: ../..` snapshots
+  the repo, restricted by `files`.
 - `python-deps.yml` — **generated** `sources:` fragment for `python3-deps`.
   Do not hand-edit.
-- `optibubble.sh` — launcher; sets `XDG_DATA_HOME` data dir and `PYTHONPATH`.
+- `optibubble.sh` — launcher; strips stray `PYTHON*`, sets `PYTHONPATH` to the
+  version-agnostic lib dir, exports the WebKit overrides, and sets the data dir.
 - `com.optibubble.app.desktop` / `com.optibubble.app.metainfo.xml` — desktop
   entry + AppStream metadata (general-user narrative).
 - `../..` refers to the repo root; the manifest lives in `packaging/flatpak/`.

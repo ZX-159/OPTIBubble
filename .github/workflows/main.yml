@@ -315,7 +315,7 @@ jobs:
         run: test -f optibubble/web/dist/index.html
 
       - name: Build Flatpak (offline, vendored wheels)
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v7
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
         with:
           bundle: OPTIBubble_${{ inputs.release_version }}_x86_64.flatpak
           manifest-path: packaging/flatpak/com.optibubble.app.yml

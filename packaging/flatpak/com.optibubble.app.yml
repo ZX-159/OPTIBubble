@@ -30,15 +30,26 @@ finish-args:
   - --filesystem=xdg-data
   # Let the user open/export documents through the portal.
   - --filesystem=xdg-documents
-  # Make the app-installed Python packages importable at runtime.
-  - --env=PYTHONPATH=/app/lib/python3.12/site-packages
+  # The app-installed Python packages live in a version-agnostic dir (pip
+  # --target), so PYTHONPATH is stable regardless of the runtime's Python minor.
+  - --env=PYTHONPATH=/app/optibubble/lib
+  # WebKitGTK can abort with "Could not create default EGL display:
+  # EGL_BAD_PARAMETER" inside a sandbox (no usable GPU path). Force the
+  # software / non-dmabuf compositing path so the webview renders.
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
+  - --env=WEBKIT_DISABLE_COMPOSITING_MODE=1
 
 modules:
   # -- runtime Python dependencies, installed offline from vendored wheels ----
   - name: python3-deps
     buildsystem: simple
     build-commands:
-      - python3 -m pip install --no-index --no-deps --prefix=/app wheels/*.whl
+      # --target writes every package flat into /app/optibubble/lib (no
+      # site-packages subdir), so PYTHONPATH is version-agnostic — this can't
+      # break if the freedesktop 24.08 runtime ships a Python minor other than
+      # the one this manifest was written for. The wheels were resolved for the
+      # same glibc the 24.08 SDK ships (>= 2.34), so they install cleanly here.
+      - python3 -m pip install --no-index --no-deps --target=/app/optibubble/lib wheels/*.whl
 
     sources:
       - type: file

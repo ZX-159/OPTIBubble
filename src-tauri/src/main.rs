@@ -61,24 +61,37 @@ fn bundled_engine() -> Option<std::path::PathBuf> {
 }
 
 fn spawn_backend() -> Option<Child> {
+    // A Python subprocess inherits the parent environment. When this binary is
+    // bundled inside an AppImage (or a similar packer), the runtime exports
+    // PYTHONHOME/PYTHONPATH pointing at ITS OWN mounted payload
+    // (e.g. /tmp/.mount_OPTIBu…/usr/). If that leaks into the child, a system
+    // python3 initialises against the packer's prefix instead of its own and
+    // dies with `Fatal Python error: Failed to import encodings`. Strip the
+    // whole PYTHON* family so every spawned interpreter uses its own prefix.
+    let clean_env = |cmd: &mut Command| {
+        for var in ["PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE",
+                    "PYTHONPLATLIBDIR", "PYTHONSAFEPATH"] {
+            cmd.env_remove(var);
+        }
+    };
+
     // 1 · the frozen engine bundled with the installer (no Python needed)
     if let Some(engine) = bundled_engine() {
-        if let Ok(child) = Command::new(&engine)
-            .args(["--no-browser", "--port-file"])
-            .arg(port_file())
-            .spawn()
-        {
+        let mut cmd = Command::new(&engine);
+        cmd.args(["--no-browser", "--port-file"]).arg(port_file());
+        clean_env(&mut cmd);
+        if let Ok(child) = cmd.spawn() {
             return Some(child);
         }
     }
     // 2 · fall back to a system python (developer machines)
     for exe in ["python3", "python"] {
-        if let Ok(child) = Command::new(exe)
-            .args(["main.py", "--no-browser", "--port-file"])
+        let mut cmd = Command::new(exe);
+        cmd.args(["main.py", "--no-browser", "--port-file"])
             .arg(port_file())
-            .current_dir("..")          // src-tauri/ → project root
-            .spawn()
-        {
+            .current_dir("..");          // src-tauri/ → project root
+        clean_env(&mut cmd);
+        if let Ok(child) = cmd.spawn() {
             return Some(child);
         }
     }
@@ -121,6 +134,23 @@ fn build_window(app: &tauri::App, port: u16) -> tauri::Result<()> {
 }
 
 fn main() {
+    // WebKitGTK aborts on some GPU/driver combos with
+    //   "Could not create default EGL display: EGL_BAD_PARAMETER. Aborting..."
+    // (seen on AppImages and in headless / GPU-less VM sessions, and in Flatpak
+    // sandboxes). The dmabuf renderer is the usual culprit. Force the
+    // software/compositing-safe path so the window always renders, unless the
+    // user explicitly overrides these to fine-tune their own GPU. Set BEFORE the
+    // Tauri/GTK/webview initialises so WebKit reads them, and before any child
+    // (the spawned engine inherits them harmlessly).
+    for (var, val) in [
+        ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+        ("WEBKIT_DISABLE_COMPOSITING_MODE", "1"),
+    ] {
+        if std::env::var(var).is_err() {
+            std::env::set_var(var, val);
+        }
+    }
+
     // clear any stale port file from a previous run
     let _ = std::fs::remove_file(port_file());
 
