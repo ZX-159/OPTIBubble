@@ -41,8 +41,34 @@ fn read_port_from_file() -> Option<u16> {
         .ok()
 }
 
-fn backend_up(port: u16) -> bool {
-    TcpStream::connect((HOST, port)).is_ok()
+/// Is the OPTIBubble engine actually serving on (HOST, port)?
+///
+/// A bare TCP connect (what this used to do) is NOT enough: any unrelated
+/// process that happens to be listening on the default port makes the shell
+/// think the engine is up, skip launching it, and point the webview at a
+/// foreign server — which answers "HTTP 501". We issue a minimal HTTP GET
+/// /health and match the OPTIBubble identity marker, so the shell only ever
+/// reuses a port that is genuinely our engine. This is what makes the app
+/// independent of pre-existing system services on common ports.
+fn is_engine(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let Ok(mut stream) = TcpStream::connect((HOST, port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let request = format!(
+        "GET /health HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\nUser-Agent: optibubble-shell\r\n\r\n",
+        HOST, port
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut body = String::new();
+    if stream.read_to_string(&mut body).is_err() {
+        return false;
+    }
+    body.contains("\"app\":\"OPTIBubble\"")
 }
 
 fn bundled_engine() -> Option<std::path::PathBuf> {
@@ -98,17 +124,20 @@ fn spawn_backend() -> Option<Child> {
     None
 }
 
-/// Wait for the backend, returning the port it is actually serving on.
-/// Prefers the port the engine published; falls back to probing the default.
+/// Wait for the OPTIBubble backend, returning the port it is actually serving.
+/// Only accepts a port once it answers /health as our engine. The engine reports
+/// the port it bound (it falls back off the default when that port is taken), so
+/// even if an unrelated service squats 8090 we follow the engine to its real
+/// port instead of opening the webview on the foreign one.
 fn wait_for_backend(timeout: Duration) -> u16 {
     let start = Instant::now();
     loop {
         if let Some(p) = read_port_from_file() {
-            if backend_up(p) {
+            if is_engine(p) {
                 return p;
             }
         }
-        if backend_up(DEFAULT_PORT) {
+        if is_engine(DEFAULT_PORT) {
             return DEFAULT_PORT;
         }
         if start.elapsed() >= timeout {
@@ -116,7 +145,10 @@ fn wait_for_backend(timeout: Duration) -> u16 {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    DEFAULT_PORT
+    // Did not confirm the engine inside the timeout. Prefer the port the engine
+    // reported (it may still be finishing its first cold import / firewall
+    // prompt); otherwise fall back to the default.
+    read_port_from_file().unwrap_or(DEFAULT_PORT)
 }
 
 /// Build the main webview at the *actual* serving port (not hard-coded).
@@ -154,13 +186,19 @@ fn main() {
     // clear any stale port file from a previous run
     let _ = std::fs::remove_file(port_file());
 
-    let child: Option<Child> = if !backend_up(DEFAULT_PORT) {
-        let c = spawn_backend();
-        // wait up to 30 s for the engine (first import of cv2 can be slow)
-        let _ = wait_for_backend(Duration::from_secs(30));
-        c
-    } else {
+    // Launch the engine unless a REAL OPTIBubble engine is already serving the
+    // default port. We must NOT trust a bare open socket here — an unrelated
+    // service squatting the port would have kept the old code from launching the
+    // engine and then pointed the webview at that server (HTTP 501). With a true
+    // identity check we always get our own engine, which sits on a free port.
+    let child: Option<Child> = if is_engine(DEFAULT_PORT) {
         None
+    } else {
+        let c = spawn_backend();
+        // wait up to 60 s for the engine (first import of cv2 on a cold machine,
+        // plus any Windows firewall prompt, can take a while)
+        let _ = wait_for_backend(Duration::from_secs(60));
+        c
     };
 
     // The engine publishes the port it actually bound; read it once and open
