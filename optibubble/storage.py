@@ -72,24 +72,13 @@ class Storage:
         self.save_test(test)
         return root
 
-    def _write_text(self, path: Path, text: str) -> None:
-        """Thread-safe, atomic write of a small JSON/text file (save_test, review
-        queue). Serialised on the same lock as the CSV append so parallel workers
-        cannot interleave a partial file with a reader, and written to a temp
-        file + ``os.replace`` so no reader ever sees truncated content."""
-        with self._lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            tmp.replace(path)
-
     def save_test(self, test: TestConfig, layout: Optional[SheetLayout] = None) -> None:
         root = self.test_root(test)
         root.mkdir(parents=True, exist_ok=True)
         payload = {"test": test.to_dict()}
         if layout is not None:
             payload["layout"] = layout.to_dict()
-        self._write_text(root / "test.json", json.dumps(payload, indent=2))
+        (root / "test.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def load_test(self, test_id: str) -> Optional[dict]:
         p = tests_dir(self.data_dir) / test_id / "test.json"
@@ -175,7 +164,8 @@ class Storage:
         pending = self.test_root(test) / "review" / "pending" / f"{r.sheet_id}.json"
         payload = {"test_id": test.test_id, "source_image": source_image,
                    "result": _result_to_json(r)}
-        self._write_text(pending, json.dumps(payload, indent=2))
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return pending
 
     def pending_reviews(self, test: TestConfig) -> List[dict]:

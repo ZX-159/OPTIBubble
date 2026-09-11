@@ -96,10 +96,17 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    outputs:
+      # The single release every builder uploads to. Passing this id to
+      # tauri-action makes it SKIP its own getOrCreateRelease, so the 6 matrix
+      # legs can't race to create the same draft (the source of duplicate/409
+      # "already exists" errors and flaky uploads). One owner, one release.
+      release_id: ${{ steps.create.outputs.id }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Create (or update) the draft release + tag
+        id: create
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ inputs.release_version }}
@@ -216,10 +223,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: .
-          # Auto-rev version to match the tag created by prepare-release.
-          tagName: v${{ inputs.release_version }}
+          # Upload to the release that prepare-release already created. Giving
+          # tauri-action the id makes it skip create — no race between the
+          # parallel legs, and no "release already exists" 409s.
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
           releaseDraft: true
           prerelease: false
+          # Keep building even if one leg's upload hiccups; the action retries.
+          retryAttempts: 3
           args: ${{ matrix.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -227,43 +238,74 @@ jobs:
   # ---------------------------------------------- SHA256SUMS (supply chain) --
   checksums:
     name: Generate & verify SHA256SUMS
-    needs: tauri
+    # tauri (all installers uploaded) + prepare-release (to reuse its release id)
+    needs: [tauri, prepare-release]
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # The release is a DRAFT, so `gh release download` errors (cli/cli#10797).
-      # Pull the assets over the REST API instead, which works for drafts. Skip
-      # any pre-existing checksums/signatures so we hash ONLY the installers.
+      # The release is a DRAFT, so `gh release download` errors (cli/cli#10797)
+      # and `browser_download_url` 404s (it only works after publish; it's a
+      # browser-cookie endpoint). We pull assets through the API instead:
+      #
+      #   * Resolve the release ID by tag (draft releases are returned), falling
+      #     back to listing releases to find it — robust against a tag-lookup 404.
+      #   * List assets, skipping any pre-existing SHA256SUMS/signatures so we
+      #     hash ONLY the installers.
+      #   * Download each via GET /releases/assets/{asset_id} with
+      #     Accept: application/octet-stream.
+      #
+      # We use `gh` (preinstalled on ubuntu-latest) rather than raw curl because
+      # GitHub redirects that request to a signed S3 URL. `gh` follows the
+      # redirect while STRIPPING the Authorization header on the cross-host hop —
+      # a bare `curl -L -H "Authorization: ..."` re-sends that header to S3,
+      # which rejects it (the 404 you hit). `gh` also authenticates via GH_TOKEN.
       - name: Download the release assets
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          VERSION="${{ inputs.release_version }}"
           mkdir -p assets && cd assets
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/v${{ inputs.release_version }}" \
-            -o release.json
-          python3 - <<'PY'
-          import json, os, subprocess
-          rel = json.load(open("release.json"))
-          skip = {"release.json", "SHA256SUMS", "SHA256SUMS.asc", "SHA256SUMS.sig"}
-          dls = 0
-          for a in rel.get("assets", []):
-              if a["name"] in skip:
-                  continue
-              subprocess.run([
-                  "curl", "-fsSL",
-                  "-H", f"Authorization: Bearer {os.environ['GH_TOKEN']}",
-                  "-H", "Accept: application/octet-stream",
-                  "-o", a["name"], a["url"],
-              ], check=True)
-              dls += 1
-          if dls == 0:
-              print("::error::No installer assets were found on the release — the upload likely failed.")
-              raise SystemExit(1)
-          print(f"downloaded {dls} installer asset(s)")
-          PY
-          rm -f release.json SHA256SUMS
+
+          # 1 · resolve the release id. Prefer the id prepare-release captured
+          # (one authoritative release the whole pipeline uses); fall back to a
+          # tag lookup, then to listing releases, so this never 404s on a draft.
+          RELEASE_ID="${{ needs.prepare-release.outputs.release_id }}"
+          if [ -z "$RELEASE_ID" ]; then
+            RELEASE_ID=$(gh api "/repos/$GITHUB_REPOSITORY/releases/tags/v$VERSION" \
+                          --jq '.id' 2>/dev/null || true)
+          fi
+          if [ -z "$RELEASE_ID" ]; then
+            RELEASE_ID=$(gh api "/repos/$GITHUB_REPOSITORY/releases" --paginate \
+                          --jq ".[] | select(.tag_name==\"v$VERSION\") | .id" | head -1)
+          fi
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not find a release for v$VERSION (id lookup failed)."
+            exit 1
+          fi
+          echo "Found release id $RELEASE_ID"
+
+          # 2 · list installer assets (id \t name), excluding checksums/signatures
+          gh api "/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
+            --jq '.[] | [.id, .name] | @tsv' \
+            | grep -Ev $'\t(SHA256SUMS|SHA256SUMS\\.asc|SHA256SUMS\\.sig)$' > assets.tsv
+
+          if [ ! -s assets.tsv ]; then
+            echo "::error::No installer assets found on the release — the upload likely failed."
+            exit 1
+          fi
+          echo "Found $(wc -l < assets.tsv) installer asset(s) to checksum."
+
+          # 3 · download each asset by id (octet-stream; gh handles the S3 redirect)
+          while IFS=$'\t' read -r id name; do
+            echo "  ↓ $name (asset $id)"
+            gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$id" \
+              -H "Accept: application/octet-stream" > "$name"
+          done < assets.tsv
+          rm -f assets.tsv
+          echo "All assets downloaded."
 
       # Only hash real binaries (not the checksum/signatures themselves). Fail
       # loudly if there is nothing to hash, so a broken release is caught here.

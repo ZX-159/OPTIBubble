@@ -10,42 +10,15 @@ reloaded later without a database.
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import string
-import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
-def app_root() -> Path:
-    """Resolve the application root folder.
-
-    * **Raw terminal** (``python main.py``): the repository root — the parent of
-      this file's directory (``optibubble/``).
-    * **Frozen bundle** (PyInstaller / native Tauri installer): the directory the
-      runtime unpacks to, taken from ``sys._MEIPASS`` (falling back to the folder
-      of the frozen executable). The spec bundles assets under
-      ``<root>/optibubble/{fonts,web}`` so the *same* relative layout holds in
-      both modes.
-
-    This is what makes one codebase work identically from source and from a
-    PyInstaller onefile binary.
-    """
-    if getattr(sys, "frozen", False):            # PyInstaller onefile / onedir
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            return Path(meipass)
-        return Path(sys.executable).resolve().parent
-    # source run: parent of this module's directory is the project root
-    return Path(__file__).resolve().parent.parent
-
-
-BASE_DIR = app_root() / "optibubble"
+BASE_DIR = Path(__file__).resolve().parent
 FONTS_DIR = BASE_DIR / "fonts"
-WEB_DIR = BASE_DIR / "web"
 
 FONT_OPTI = "OPTIBubbleDoubleBold"           # logo wordmark font
 FONT_OPEN_SANS = "OpenSans"                   # body font family (registered variants)
@@ -84,10 +57,7 @@ class AdvancedSettings:
 
     # --- local server -------------------------------------------------------
     host: str = "0.0.0.0"              # bind all interfaces (LAN reachable)
-    # Default HTTP port is a high, unassigned range to avoid the macOS AirPlay
-    # Receiver collision on 5000 (O_SError: [Errno 48] address in use). The HTTPS
-    # branch (live mobile camera) stays on its own dedicated 5443.
-    port: int = 8090
+    port: int = 5000
     https_port: int = 5443             # HTTPS bridge (live mobile camera)
     enable_https: bool = True
     max_upload_mb: int = 30
@@ -343,29 +313,11 @@ class TestConfig:
 # Paths
 # ----------------------------------------------------------------------------
 def default_data_dir() -> Path:
-    """User data root — cross-platform and sandbox-safe.
+    """User data root.
 
-    Resolution order (first match wins):
-
-    1. ``XDG_DATA_HOME/OPTIBubbleData`` — honoured by Linux desktops and other
-       sandboxes.
-    2. Windows: ``%LOCALAPPDATA%/OPTIBubbleData`` (or ``%APPDATA%``) — the native
-       per-user app-data location, not the home directory.
-    3. macOS: ``~/Library/Application Support/OPTIBubbleData``.
-    4. Fallback: ``~/OPTIBubbleData`` (the long-standing documented default).
-
-    Deliberately *not* ``~/OPTIBubble`` — that is the natural clone location of
-    this repository, and runtime data must never mix with source files.
+    Deliberately *not* ``~/OPTIBubble`` — that is the natural clone location
+    of this repository, and runtime data must never mix with source files.
     """
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if xdg:
-        return Path(xdg).expanduser() / "OPTIBubbleData"
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-        if base:
-            return Path(base).expanduser() / "OPTIBubbleData"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "OPTIBubbleData"
     return Path.home() / "OPTIBubbleData"
 
 
